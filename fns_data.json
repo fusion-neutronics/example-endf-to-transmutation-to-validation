@@ -10168,7 +10168,7 @@
  },
  "description": "JAEA FNS decay-heat benchmark, as distributed through the IAEA CoNDERC fusion benchmark collection.",
  "group_structure": "CCFE-709",
- "source": "https://github.com/jbae11/openmc_activator (fns/)",
+ "source": "https://nds.iaea.org/conderc/fusion/files/fns.zip",
  "spectra_by_position": {
   "1": [
    0.0,

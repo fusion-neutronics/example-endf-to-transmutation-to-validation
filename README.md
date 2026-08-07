@@ -176,20 +176,18 @@ then withdrawn, and its heat output is measured repeatedly as it cools.
 
 ### fns_data.json
 
-The measured data is redistributed here, not generated. It arrives as 396 files
-across 73 foil directories, three per experiment, via
-[jbae11/openmc_activator](https://github.com/jbae11/openmc_activator), whose own
-comparison notebook is worth reading alongside this one. `build_fns_data.py`
-packs that tree into one 175 KB `fns_data.json`, which is what gets committed
-and what `fns_case.py` reads:
+The measured data in `fns_data.json` is reformatted from the benchmark archive
+the IAEA publishes at [CoNDERC](https://nds.iaea.org/conderc/fusion/), which
+`build_fns_data.py` reads directly:
 
 ```bash
-python build_fns_data.py --fns-dir ~/openmc_activator/fns
+python build_fns_data.py                    # fetches fns.zip, 14 MB, cached
+python build_fns_data.py --fns-zip fns.zip  # a copy you already have
 ```
 
-Nobody needs the original tree to use this example. The script is kept because
-it is the record of how the JSON was derived, and because re-deriving it is the
-only way to check that record.
+Nobody needs the archive to use this example. The script is kept because it is
+the record of how the JSON was derived, and because re-deriving it is the only
+way to check that record.
 
 Three things go in, per experiment:
 
