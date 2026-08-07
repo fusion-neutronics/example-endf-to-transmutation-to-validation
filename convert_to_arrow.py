@@ -22,13 +22,21 @@ With no ``--endf-dir`` it falls back to fetching TENDL-2025, either from
 download is 3.5 GB however few nuclides are wanted, because TENDL publishes its
 neutron sublibrary as a single archive.
 
-The reaction cross sections produced here are the only thing this example takes
-from the chosen library. The transmutation network (decay constants, decay
-energies, which reaction leads to which product) comes from endf-b8.1, because
-TENDL is a neutron-reaction library and carries no decay sublibrary at all.
+Two things come out of the chosen library: the reaction cross sections, and the
+isomeric branching that says which state each product is made in. The rest of
+the transmutation network (decay constants, decay energies, which reaction
+leads to which product) comes from endf-b8.1, because a neutron-reaction
+library does not carry it.
+
+Building the branching subsection needs decay data to map a product's nuclear
+level to its metastable state, so the first run fetches the ENDF/B-8.1 decay
+sublibrary. ``--decay-dir`` uses a copy you already have; ``--no-branching``
+skips it, at the cost of being wrong by up to 6x on foils whose decay heat
+comes from an isomer.
 """
 
 import argparse
+import fnmatch
 import os
 import pathlib
 import re
@@ -45,6 +53,15 @@ import fns_case
 HERE = pathlib.Path(__file__).resolve().parent
 
 TARBALL_URL = "https://tendl.imperial.ac.uk/tendl_2025/tar_files/TENDL-n.tgz"
+
+# Building the isomeric branching subsection needs decay data, to say which
+# nuclear level of an (n,2n) product is which metastable state. Only the 738
+# metastable evaluations are read, and the whole sublibrary is 10.6 MB, so it
+# is fetched rather than made a prerequisite.
+DECAY_URL = ("https://www.nndc.bnl.gov/endf-releases/releases/B-VIII.1/"
+             "decay/decay-version.VIII.1.tar.gz")
+DECAY_LIBRARY = "endf-b8.1"
+DECAY_GLOB = "dec-*m[0-9].endf"
 
 # ENDF is a fixed-column format: six 11-character fields, then MAT, MF, MT.
 _FIELD = [slice(0, 11), slice(11, 22), slice(22, 33), slice(33, 44)]
@@ -190,6 +207,81 @@ def fetch_tendl(tarball, work_dir, nuclides):
     return resolved
 
 
+def fetch_decay(decay_dir, work_dir):
+    """A directory holding the metastable decay evaluations.
+
+    Uses `decay_dir` if it already has them, otherwise pulls the ENDF/B-8.1
+    decay sublibrary and keeps only the metastable files, which are the only
+    ones the isomer table is built from.
+    """
+    if decay_dir is not None:
+        if not sorted(pathlib.Path(decay_dir).glob(DECAY_GLOB)):
+            raise SystemExit(f"--decay-dir {decay_dir} holds no {DECAY_GLOB} files")
+        return pathlib.Path(decay_dir)
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    if sorted(work_dir.glob(DECAY_GLOB)):
+        return work_dir
+
+    print(f"DECAY: fetching {DECAY_URL}")
+    print("       (10.6 MB, keeping the metastable evaluations)")
+    kept = 0
+    with urllib.request.urlopen(DECAY_URL) as response:
+        with tarfile.open(fileobj=response, mode="r|gz") as tar:
+            for info in tar:
+                name = pathlib.PurePosixPath(info.name).name
+                if not info.isfile() or not fnmatch.fnmatch(name, DECAY_GLOB):
+                    continue
+                source = tar.extractfile(info)
+                with open(work_dir / name, "wb") as out:
+                    shutil.copyfileobj(source, out)
+                kept += 1
+    if not kept:
+        raise SystemExit(f"no {DECAY_GLOB} files in {DECAY_URL}")
+    print(f"       {kept} metastable evaluations in {work_dir}")
+    return work_dir
+
+
+def build_branching(sources, decay_dir, out_root, library, work_dir):
+    """Write a `branching/` subsection from the same evaluations as the rates.
+
+    Which fraction of an (n,2n) leaves the product in its metastable state
+    rather than its ground state is energy dependent, and lives in MF=8/9/10 of
+    the neutron evaluation. Without it the run falls back to whatever scalar
+    branching the reference chain carries, which is wrong by up to 6x for foils
+    whose decay heat comes from an isomer.
+
+    Scoped to the foil's own isotopes. That covers the reactions that matter
+    here, since one 5 minute irradiation barely burns the products, but it is
+    not the whole chain.
+    """
+    from nuclear_data_to_arrow import convert_branching
+    from nuclear_data_to_arrow.branching_extractor import tendl_filename
+
+    # The extractor locates evaluations by TENDL/ENDF-B/JEFF filename, while
+    # the conversion above found them by reading their headers. Link them under
+    # names it recognises so any naming works here too.
+    linked = work_dir / "linked"
+    if linked.is_dir():
+        shutil.rmtree(linked)
+    linked.mkdir(parents=True)
+    for nuclide, path in sources.items():
+        (linked / tendl_filename(nuclide)).symlink_to(path.resolve())
+
+    print(f"BRANCH: isomeric branching for {len(sources)} parents")
+    _, stats = convert_branching(
+        out_root,
+        neutron_dir=linked,
+        nuclides=sorted(sources),
+        decay_dir=decay_dir,
+        library=library,
+        decay_library=DECAY_LIBRARY,
+    )
+    interesting = {k: v for k, v in stats.items() if isinstance(v, int) and v}
+    print(f"        {interesting} -> {out_root}")
+    return out_root
+
+
 def _extract(tar, members, dest):
     """Write just `members` out of an open tar, streaming-safe (no seeking)."""
     remaining = set(members)
@@ -224,11 +316,17 @@ def main():
                              "(default: tendl-2025)")
     parser.add_argument("--output", type=pathlib.Path, default=HERE / "data" / "neutron",
                         help="where the .arrow directories go")
+    parser.add_argument("--chain", type=pathlib.Path, default=HERE / "data" / "chain",
+                        help="where the branching subsection goes")
     parser.add_argument("--tarball", type=pathlib.Path,
                         help="local TENDL-n.tgz, used only without --endf-dir")
     parser.add_argument("--temperature", type=float, default=294.0, help="Kelvin (default: 294)")
     parser.add_argument("--njoy", default=shutil.which("njoy") or "njoy",
                         help="NJOY executable (default: njoy on PATH)")
+    parser.add_argument("--decay-dir", type=pathlib.Path,
+                        help="ENDF decay files for the isomer table; downloaded if absent")
+    parser.add_argument("--no-branching", action="store_true",
+                        help="skip the isomeric branching subsection")
     parser.add_argument("--force", action="store_true", help="reconvert files that already exist")
     args = parser.parse_args()
 
@@ -286,6 +384,12 @@ def main():
         )
         size = sum(f.stat().st_size for f in target.rglob("*")) / 1e6
         print(f"{name}: {time.perf_counter() - start:.0f} s, {size:.1f} MB -> {target}")
+
+    if args.no_branching:
+        print("\nBRANCH: skipped, so isomer-dominated foils (Nb, Ag, W) will be wrong")
+    else:
+        build_branching(sources, fetch_decay(args.decay_dir, HERE / "data" / "decay"),
+                        args.chain, args.library, HERE / "data")
 
     print(f"\nArrow cross sections in {out_dir}")
     print(f"Next: python run_transmutation.py --case {args.case}"

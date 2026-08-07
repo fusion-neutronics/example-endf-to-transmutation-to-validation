@@ -44,13 +44,24 @@ TEMPERATURE = 294.0
 DECAY_LIBRARY = "endf-b8.1"
 
 
-def run(case, cross_sections):
+def run(case, cross_sections, chain):
     """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
     yats.cross_section_data = str(cross_sections)
     yats.transmutation_decay_data = DECAY_LIBRARY
     yats.transmutation_reactions = DECAY_LIBRARY
     yats.transmutation_fission_yields = DECAY_LIBRARY
-    yats.transmutation_branch_ratios = DECAY_LIBRARY
+
+    # Isomeric branching is the one part of the network that has to move with
+    # the cross sections. Whether an (n,2n) lands in the metastable state is
+    # energy dependent, and for foils whose heat comes from an isomer it decides
+    # the answer. convert_to_arrow.py extracts it from the same evaluations.
+    if chain is not None and chain.is_dir():
+        yats.transmutation_branch_ratios = str(chain)
+        print(f"branching: {chain}")
+    else:
+        yats.transmutation_branch_ratios = DECAY_LIBRARY
+        print(f"branching: {DECAY_LIBRARY} (isomer-dominated foils will be off; "
+              "rerun convert_to_arrow.py without --no-branching)")
 
     # The histogram is a shape; the pulse rate carries the magnitude.
     spectrum = yats.NeutronSource(
@@ -173,6 +184,8 @@ def main():
     parser.add_argument("--cross-sections", type=pathlib.Path,
                         default=HERE / "data" / "neutron",
                         help="Arrow directory from convert_to_arrow.py")
+    parser.add_argument("--chain", type=pathlib.Path, default=HERE / "data" / "chain",
+                        help="branching subsection from convert_to_arrow.py")
     parser.add_argument("--output", type=pathlib.Path, default=HERE / "results")
     parser.add_argument("--list", action="store_true",
                         help="list the available foils and experiments, then exit")
@@ -192,7 +205,7 @@ def main():
     print(f"case: {case.describe()}")
     print(f"spectrum: {fns_case.GROUPS} CCFE groups, {case.spectrum.sum():.4g} n/cm2/s summed")
 
-    calculated, breakdown = run(case, args.cross_sections)
+    calculated, breakdown = run(case, args.cross_sections, args.chain)
     ratio, metrics = summarise(case, calculated)
     plot(case, calculated, breakdown, ratio, metrics, args.output)
 
