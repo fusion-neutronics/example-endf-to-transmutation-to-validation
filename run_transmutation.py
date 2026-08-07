@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Step 2: irradiate one FNS foil with yats and plot against the measurement.
+
+The FNS decay-heat experiments (JAEA Fusion Neutronics Source, IAEA CoNDERC)
+hold a 1 g foil in a 14 MeV field, pull it out, and measure how much heat it
+gives off as the activation products decay.
+
+    run_transmutation.py                                 # iron, the default
+    run_transmutation.py --case W
+    run_transmutation.py --case SS316
+    run_transmutation.py --case Fe --experiment 1996exp_7hour
+
+Everything about the case (composition, density, flux, spectrum, schedule and
+the measurement) comes from `fns_data.json`. Cross sections come from the Arrow
+directory convert_to_arrow.py produced, which has to hold the same foil's
+isotopes. Decay data and the reaction network come from endf-b8.1, which yats
+downloads on first use.
+
+There is no transport here: the measured spectrum is the input, and yats
+collapses it against the cross sections to get one-group reaction rates, then
+solves the Bateman system over the schedule.
+"""
+
+import argparse
+import json
+import pathlib
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import yats  # noqa: E402
+
+import fns_case  # noqa: E402
+
+HERE = pathlib.Path(__file__).resolve().parent
+
+# The temperature the cross sections were broadened to by convert_to_arrow.py.
+TEMPERATURE = 294.0
+
+# Decay data, decay energies and the reaction network. Held on endf-b8.1
+# because TENDL publishes no decay sublibrary.
+DECAY_LIBRARY = "endf-b8.1"
+
+
+def run(case, cross_sections):
+    """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
+    yats.cross_section_data = str(cross_sections)
+    yats.transmutation_decay_data = DECAY_LIBRARY
+    yats.transmutation_reactions = DECAY_LIBRARY
+    yats.transmutation_fission_yields = DECAY_LIBRARY
+    yats.transmutation_branch_ratios = DECAY_LIBRARY
+
+    # The histogram is a shape; the pulse rate carries the magnitude.
+    spectrum = yats.NeutronSource(
+        energy=yats.sources.Histogram("CCFE-709", case.spectrum.tolist())
+    )
+    schedule = yats.PulseSchedule(
+        [yats.Pulse(duration=(seconds, "s"), rate=flux, source=spectrum)
+         for seconds, flux in case.irradiation]
+        + [yats.Cooldown(duration=(seconds, "s")) for seconds in case.cooling]
+    )
+
+    material = yats.Material(
+        composition=case.composition,
+        fraction_type="mass",
+        density=case.density,
+        volume=case.mass_g / case.density,
+        temperature=TEMPERATURE,
+        name=f"{case.name} foil",
+    )
+    nuclides = sorted(material.get_nuclide_names())
+    print(f"material: {len(nuclides)} nuclides, {' '.join(nuclides)}")
+
+    states = material.transmute(schedule)
+
+    # One state per schedule step and no initial entry, so the irradiation
+    # pulses come first and the measurement starts after them.
+    heat, breakdown = [], []
+    for state in states[len(case.irradiation):]:
+        contributions = state.decay_heat(by_nuclide=True)
+        heat.append(sum(contributions.values()) / case.mass_g * 1e6)
+        breakdown.append(contributions)
+    return np.array(heat), breakdown
+
+
+def summarise(case, calculated):
+    """C/E per point, plus the one-line numbers that go in the plot title."""
+    ratio = np.divide(calculated, case.measured,
+                      out=np.full_like(calculated, np.nan), where=case.measured > 0)
+    sigma = case.uncertainty / np.where(case.measured > 0, case.measured, np.nan)
+    return ratio, {
+        "median_ratio": float(np.nanmedian(ratio)),
+        "mean_deviation_percent": float(np.nanmean(np.abs(ratio - 1.0)) * 100.0),
+        "median_measurement_sigma_percent": float(np.nanmedian(sigma) * 100.0),
+    }
+
+
+def plot(case, calculated, breakdown, ratio, metrics, out_dir):
+    times, measured, uncertainty = case.times, case.measured, case.uncertainty
+    figure, (top, bottom) = plt.subplots(
+        2, 1, figsize=(8, 8), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
+    )
+
+    handles = [
+        top.errorbar(times, measured, yerr=uncertainty, fmt="o", color="black",
+                     markersize=5, capsize=3, label="FNS measurement", zorder=3),
+        top.plot(times, calculated, "-", color="#d62728", linewidth=2,
+                 label="yats", zorder=2)[0],
+    ]
+
+    # Name the products that carry the heat, so the curve is readable as physics
+    # rather than as one number.
+    totals = {}
+    for contributions in breakdown:
+        for nuclide, watts in contributions.items():
+            totals[nuclide] = totals.get(nuclide, 0.0) + watts
+    leaders = sorted(totals, key=totals.get, reverse=True)[:3]
+    for nuclide in leaders:
+        series = [c.get(nuclide, 0.0) / case.mass_g * 1e6 for c in breakdown]
+        handles.append(top.plot(times, series, "--", linewidth=1, alpha=0.7, label=nuclide)[0])
+
+    top.set_ylabel("specific decay heat [uW/g]")
+    top.set_yscale("log")
+    # Short-lived contributors fall away by orders of magnitude; without a floor
+    # they stretch the axis until the total and the measurement are one line.
+    positive = calculated[calculated > 0]
+    if positive.size:
+        top.set_ylim(bottom=positive.min() / 300.0, top=positive.max() * 3.0)
+    # The agreement goes on the figure, not just on stdout, so a directory of
+    # these can be read side by side. The measurement's own scatter sits next to
+    # the deviation because it says whether that deviation means anything.
+    irradiation = sum(seconds for seconds, _ in case.irradiation)
+    top.set_title(
+        f"FNS {case.name}, {case.experiment}: "
+        f"{irradiation / 60:g} minute irradiation at 14 MeV\n"
+        f"median C/E {metrics['median_ratio']:.3f}, "
+        f"mean deviation {metrics['mean_deviation_percent']:.1f}%, "
+        f"measurement sigma {metrics['median_measurement_sigma_percent']:.1f}%",
+        fontsize=11,
+    )
+    top.legend(handles=handles, loc="lower left")
+    top.grid(alpha=0.3)
+
+    bottom.axhline(1.0, color="black", linewidth=1)
+    bottom.fill_between(times, 1 - uncertainty / measured, 1 + uncertainty / measured,
+                        color="black", alpha=0.15, label="measurement uncertainty")
+    bottom.plot(times, ratio, "o-", color="#d62728", markersize=4)
+    bottom.set_xlabel(f"time after shutdown [{case.time_unit}]")
+    bottom.set_ylabel("yats / measured")
+    bottom.set_xscale("log")
+    bottom.legend()
+    bottom.grid(alpha=0.3)
+
+    figure.tight_layout()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"fns_{case.name}_{case.experiment}.png"
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+    print(f"\nplot: {path}")
+    return ratio
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--case", default="Fe",
+                        help="FNS foil, e.g. Fe, W, SS316 (default: Fe)")
+    parser.add_argument("--experiment", help="which experiment (default: 2000exp_5min)")
+    parser.add_argument("--fns-data", type=pathlib.Path, default=None,
+                        help="benchmark JSON (default: ./fns_data.json)")
+    parser.add_argument("--cross-sections", type=pathlib.Path,
+                        default=HERE / "data" / "neutron",
+                        help="Arrow directory from convert_to_arrow.py")
+    parser.add_argument("--output", type=pathlib.Path, default=HERE / "results")
+    parser.add_argument("--list", action="store_true",
+                        help="list the available foils and experiments, then exit")
+    args = parser.parse_args()
+
+    if args.list:
+        for name in fns_case.cases(args.fns_data):
+            print(f"{name:8s} {' '.join(fns_case.experiments(name, args.fns_data))}")
+        return
+
+    if not args.cross_sections.is_dir():
+        raise SystemExit(
+            f"no cross sections at {args.cross_sections}. Run convert_to_arrow.py first."
+        )
+
+    case = fns_case.load(args.case, args.experiment, args.fns_data)
+    print(f"case: {case.describe()}")
+    print(f"spectrum: {fns_case.GROUPS} CCFE groups, {case.spectrum.sum():.4g} n/cm2/s summed")
+
+    calculated, breakdown = run(case, args.cross_sections)
+    ratio, metrics = summarise(case, calculated)
+    plot(case, calculated, breakdown, ratio, metrics, args.output)
+
+    print(f"\n{case.time_unit:>9}  {'measured':>10}  {'yats':>10}  {'C/E':>6}")
+    for time, exp, calc, r in zip(case.times, case.measured, calculated, ratio):
+        print(f"{time:9.2f}  {exp:10.3e}  {calc:10.3e}  {r:6.3f}")
+    print(f"\nmedian C/E {metrics['median_ratio']:.3f}, "
+          f"mean deviation {metrics['mean_deviation_percent']:.1f}%, "
+          f"measurement sigma {metrics['median_measurement_sigma_percent']:.1f}%")
+
+    args.output.mkdir(parents=True, exist_ok=True)
+    (args.output / f"fns_{case.name}_{case.experiment}.json").write_text(json.dumps({
+        "case": case.name,
+        "experiment": case.experiment,
+        "time_unit": case.time_unit,
+        "times": case.times.tolist(),
+        "measured_uW_per_g": case.measured.tolist(),
+        "measured_uncertainty": case.uncertainty.tolist(),
+        "yats_uW_per_g": calculated.tolist(),
+        "ratio": ratio.tolist(),
+        **metrics,
+        "by_nuclide_uW_per_g": [
+            {n: w / case.mass_g * 1e6 for n, w in step.items()} for step in breakdown
+        ],
+    }, indent=2))
+
+
+if __name__ == "__main__":
+    main()

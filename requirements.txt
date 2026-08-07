@@ -1,0 +1,16 @@
+# njoy2016 is not on PyPI. The wheel puts an `njoy` binary in the venv's bin/,
+# which is what the ENDF conversion shells out to.
+--extra-index-url https://shimwell.github.io/wheels
+
+# The endf reader. It has to be this fork and this branch: from_njoy, the ACE
+# reader and Chain are not in the `endf` on PyPI, nor on the fork's own main,
+# which tracks upstream.
+git+https://github.com/shimwell/endf-python@local-develop
+
+# The converter and yats, from the yamc checkout beside this one. These resolve
+# against the directory pip runs in, so run it from this one.
+../yamc-org/yamc/packages/nuclear_data_to_arrow[njoy]
+../yamc-org/yamc/packages/yats
+
+matplotlib
+numpy
