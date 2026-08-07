@@ -21,8 +21,7 @@ It defaults to iron, and `--case` takes any of the 73 FNS foils.
 There is no neutron transport anywhere in this example. The FNS experiment
 published the spectrum the foil actually saw, so that spectrum is the input and
 yats collapses it against the cross sections to get one-group reaction rates.
-That is what yats is for: transmutation and activation given a spectrum, with
-transport left to yamc or to an experiment.
+That is what yats is for: transmutation and activation given a spectrum.
 
 ## Install
 
@@ -31,17 +30,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
-
-* `yats` and `nuclear_data_to_arrow` come from the yamc checkout, expected at
-  `../yamc-org/yamc`. The relative paths resolve against the directory pip runs
-  in, so install from this one. yats compiles a Rust extension, which is the
-  slow part and needs a Rust toolchain (https://rustup.rs); everything else is
-  a wheel.
-* the `njoy2016` wheel is on `https://shimwell.github.io/wheels`, not PyPI. It
-  puts an `njoy` binary in the venv, which is what the conversion shells out to.
-* the `endf` reader is the `local-develop` branch of
-  `github.com/shimwell/endf-python`.
 
 ## Run
 
