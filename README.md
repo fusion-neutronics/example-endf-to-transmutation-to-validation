@@ -98,7 +98,6 @@ you are actually converting. `$ENDF_DIR` works in place of `--endf-dir`.
 With no `--endf-dir` it fetches TENDL-2025 for you:
 
 ```bash
-python convert_to_arrow.py --tarball /path/to/TENDL-n.tgz
 python convert_to_arrow.py           # streams TENDL-n.tgz from tendl.imperial.ac.uk
 ```
 
