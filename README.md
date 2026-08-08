@@ -148,29 +148,37 @@ subsections under `data/chain/`:
   MT numbers it carries. TENDL-2025 gives Fe56 25 reaction channels where the
   endf-b8.1 chain gives 5, and W184 27 against 9.
 
-Mean deviation on `2000exp_5min`, adding one subsection at a time, against the
-same benchmark run through the full TENDL-2025 chain:
+Both matter for the same reason: every part of the answer that comes from
+somewhere other than the library under test makes the C/E harder to read. Mean
+deviation against the measurement on `2000exp_5min`, moving one subsection at a
+time off endf-b8.1 and onto the library the cross sections came from:
 
-| case | chain from endf-b8.1 | + branching | + topology | full TENDL-2025 chain | dominant product |
-|---|---|---|---|---|---|
-| Ti | 2.4% | 2.2% | **2.2%** | 2.2% | Sc50 |
-| Fe | 5.3% | 5.7% | **6.0%** | 6.0% | Mn56 |
-| Ag | 69.7% | 9.0% | **9.0%** | 9.0% | Ag108 |
-| Nb | 81.4% | 10.8% | **10.8%** | 10.8% | **Nb94m**, 92% of the heat |
-| W | 75.9% | 121.5% | **122.0%** | 122.0% | **W185m**, 97% of the heat |
+| case | chain from endf-b8.1 | + branching | + topology | dominant product |
+|---|---|---|---|---|
+| Ti | 2.4% | 2.2% | **2.2%** | Sc50 |
+| Fe | 5.3% | 5.7% | **6.0%** | Mn56 |
+| Ag | 69.7% | 9.0% | **9.0%** | Ag108 |
+| Nb | 81.4% | 10.8% | **10.8%** | **Nb94m**, 92% of the heat |
+| W | 75.9% | 121.5% | **122.0%** | **W185m**, 97% of the heat |
+
+Note which way some of these move. Fe gets worse at every step, and the last
+column is the honest number for TENDL-2025 on iron precisely because it is the
+one with the least endf-b8.1 left in it. A blend that happens to agree better
+with the measurement is not evidence about either library.
 
 The branching does the heavy lifting. Nb goes from 6x low to agreeing, Ag from
 70% out to 9%, and the ground-state foils barely move, which is the tell: it
-only matters where an isomer carries the heat.
+only matters where an isomer carries the heat. Read the first column as an
+artefact and not as an endf-b8.1 result, because it pairs one library's
+branching with another's cross sections.
 
-The topology is worth much less on these five, and that is the expected result
-rather than a disappointment. The channels it adds are mostly minor routes to
-products the foil already makes: iron's extra 20 channels move the heat by
-0.3%, all of it more Mn56 and Mn57 arriving by (n,d) and (n,np) on Fe57 rather
-than only by (n,p) on Fe56, and tungsten's move it by up to 0.8%, mostly more
-Ta185. Ti, Ag and Nb do not move at all at the printed precision. What it buys
-is that the last column is now reached exactly, for every foil, instead of only
-for the three that happened to agree already.
+The topology is worth much less on these five. The channels it adds are mostly
+minor routes to products the foil already makes: iron's extra 20 channels move
+the heat by 0.3%, all of it more Mn56 and Mn57 arriving by (n,d) and (n,np) on
+Fe57 rather than only by (n,p) on Fe56, and tungsten's move it by up to 0.8%,
+mostly more Ta185. Ti, Ag and Nb do not move at the printed precision. It is
+worth doing anyway because it is one more thing the answer no longer borrows,
+and on a foil whose heat runs through an unusual channel it would not be small.
 
 Both subsections are built from the foil's own isotopes, which covers the
 reactions that matter for a single 5 minute irradiation but is not the whole
@@ -250,3 +258,24 @@ a library swap that TENDL is able to express.
 
 Fission yields are the one thing TENDL does publish that is not used here: none
 of the 73 FNS foils is fissionable, so the subsection is never built.
+
+### So what is a C/E here a statement about
+
+Decay heat at time t is a sum over products of N(t) x lambda x Q. The library
+under test sets N, how much of each product got made; endf-b8.1 sets lambda and
+Q, how fast it decays and how much energy that releases. A C/E is therefore a
+statement about production rates, measured against fixed decay data.
+
+That is the useful decomposition for judging a neutron library, and it is worth
+being explicit about because the measured quantity is decay heat, so the decay
+energies scale the answer directly. Two consequences follow:
+
+* A foil is only as good a test as its decay data is settled. Where the heat
+  runs through one well known product, as iron's does through Mn56, the C/E is
+  a clean read on one cross section. Where it does not, some of the deviation
+  belongs to endf-b8.1.
+* Changing library changes only N, so two libraries run through this example
+  are compared like for like. W is the example worth looking at: TENDL-2025
+  gives 122% and TENDL-2017 gives 84.5% on the same foil, against the same
+  decay data, and 97% of that heat is W185m. That is a statement about how much
+  W185m each library makes, and nothing else.
