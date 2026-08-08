@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 
+import data_source
 import fns_case
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -93,13 +94,29 @@ def main():
                         help="passed to convert_to_arrow.py; also read from $ENDF_DIR")
     parser.add_argument("--tarball", type=pathlib.Path,
                         help="local TENDL-n.tgz, used instead of --endf-dir")
-    parser.add_argument("--library", default="tendl-2025",
-                        help="passed to convert_to_arrow.py (default: tendl-2025)")
-    parser.add_argument("--cross-sections", type=pathlib.Path,
-                        default=HERE / "data" / "neutron")
-    parser.add_argument("--output", type=pathlib.Path, default=HERE / "results" / "sweep",
-                        help="where the per-foil results and the table go")
+    parser.add_argument("--library", default=data_source.DEFAULT_LIBRARY,
+                        help="passed to convert_to_arrow.py, and the name this "
+                             "sweep's data and results are filed under. "
+                             f"Downloadable: {', '.join(sorted(data_source.TENDL_TARBALLS))} "
+                             f"(default: {data_source.DEFAULT_LIBRARY})")
+    parser.add_argument("--cross-sections", type=pathlib.Path, default=None,
+                        help="Arrow directory (default: data/<source>/neutron)")
+    parser.add_argument("--output", type=pathlib.Path, default=None,
+                        help="where the per-foil results and the table go "
+                             "(default: results/<source>/sweep)")
+    parser.add_argument("--source", default=None,
+                        help="folder name to file this run's data and results under "
+                             "(default: the library name, or the --endf-dir directory name)")
     args = parser.parse_args()
+
+    # One folder per data source, so a TENDL-2017 sweep and a TENDL-2025 sweep
+    # sit side by side and can be compared (see data_source).
+    source = data_source.slug(args.library, args.endf_dir, args.source)
+    if args.cross_sections is None:
+        args.cross_sections = HERE / "data" / source / "neutron"
+    if args.output is None:
+        args.output = HERE / "results" / source / "sweep"
+    print(f"SOURCE: {source} -> {args.output}")
 
     wanted = args.cases or fns_case.cases()
     missing = [c for c in wanted if args.experiment not in fns_case.experiments(c)]
@@ -113,12 +130,24 @@ def main():
             f"archive once for each of the {len(wanted)} foils in this sweep."
         )
 
-    converter_args = ["--library", args.library, "--output", str(args.cross_sections)]
+    # The chain is rebuilt per foil, scoped to that foil's own isotopes, so the
+    # writer and the reader have to be handed the SAME path explicitly. Leaving
+    # either of them to work it out from its own arguments is how a foil ends up
+    # read against the PREVIOUS foil's chain: no reaction in it has this foil's
+    # nuclides as a parent, so nothing is produced and the decay heat comes out
+    # a silent zero rather than an error.
+    chain_dir = HERE / "data" / source / "chain"
+    converter_args = ["--library", args.library,
+                      "--source", source,
+                      "--output", str(args.cross_sections),
+                      "--chain", str(chain_dir)]
     if args.endf_dir is not None:
         converter_args += ["--endf-dir", str(args.endf_dir)]
     if args.tarball is not None:
         converter_args += ["--tarball", str(args.tarball)]
-    runner_args = ["--cross-sections", str(args.cross_sections), "--output", str(args.output)]
+    runner_args = ["--cross-sections", str(args.cross_sections),
+                   "--chain", str(chain_dir),
+                   "--output", str(args.output)]
     args.output.mkdir(parents=True, exist_ok=True)
 
     rows = []

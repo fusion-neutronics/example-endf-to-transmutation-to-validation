@@ -17,10 +17,16 @@ recursively and each file is identified by the nuclide in its own header
 rather than by its name, so ``n-Fe056.tendl``, ``n-026_Fe_056.endf`` and
 ``whatever.dat`` are all found the same way.
 
-With no ``--endf-dir`` it falls back to fetching TENDL-2025, either from
-``--tarball`` (a local copy of ``TENDL-n.tgz``) or from the TENDL website. That
-download is 3.5 GB however few nuclides are wanted, because TENDL publishes its
-neutron sublibrary as a single archive.
+With no ``--endf-dir`` it falls back to fetching the library named by
+``--library``, either from ``--tarball`` (a local copy of ``TENDL-n.tgz``) or
+from the TENDL website. ``tendl-2017`` and ``tendl-2025`` can both be fetched;
+see ``data_source.TENDL_TARBALLS``. That download is around 3 GB however few
+nuclides are wanted, because TENDL publishes its neutron sublibrary as a single
+archive.
+
+Everything a run produces is kept under the name of the data it used, so a
+TENDL-2017 build and a TENDL-2025 build sit side by side instead of overwriting
+each other.
 
 Three things come out of the chosen library: the reaction cross sections, the
 isomeric branching that says which state each product is made in, and the
@@ -49,11 +55,10 @@ import tempfile
 import time
 import urllib.request
 
+import data_source
 import fns_case
 
 HERE = pathlib.Path(__file__).resolve().parent
-
-TARBALL_URL = "https://tendl.imperial.ac.uk/tendl_2025/tar_files/TENDL-n.tgz"
 
 # Both chain subsections need decay data: branching to say which nuclear level
 # of an (n,2n) product is which metastable state, and the reaction topology to
@@ -179,8 +184,17 @@ def tendl_name(nuclide):
     return f"n-{symbol}{mass:03d}.tendl"
 
 
-def fetch_tendl(tarball, work_dir, nuclides):
-    """The TENDL-2025 fallback: unpack the wanted members of TENDL-n.tgz."""
+def fetch_tendl(tarball, work_dir, nuclides, library):
+    """The download fallback: unpack the wanted members of `library`'s archive.
+
+    `work_dir` must already be scoped to `library`. TENDL names its evaluations
+    identically in every release, so two releases unpacked into one directory
+    would silently share files and the second library would never be read.
+
+    The layout inside the archive differs between releases (TENDL-2025 is flat,
+    TENDL-2017 nests under ``neutron_file/<El>/<El><A>/lib/endf/``), which costs
+    nothing here because `_extract` matches on the basename.
+    """
     wanted = {name: tendl_name(name) for name in nuclides}
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -195,10 +209,11 @@ def fetch_tendl(tarball, work_dir, nuclides):
         with tarfile.open(tarball, "r:gz") as tar:
             _extract(tar, members, work_dir)
     else:
-        print(f"ENDF:  streaming {TARBALL_URL}")
-        print(f"       (3.5 GB read, only the {len(members)} wanted files are kept)")
+        url = data_source.tarball_url(library)
+        print(f"ENDF:  streaming {url}")
+        print(f"       (~3 GB read, only the {len(members)} wanted files are kept)")
         print("       Use --endf-dir to convert files you already have instead.")
-        with urllib.request.urlopen(TARBALL_URL) as response:
+        with urllib.request.urlopen(url) as response:
             with tarfile.open(fileobj=response, mode="r|gz") as tar:
                 _extract(tar, members, work_dir)
 
@@ -277,22 +292,27 @@ def build_branching(sources, decay_dir, out_root, library, work_dir):
     # The extractor locates evaluations by TENDL/ENDF-B/JEFF filename, while
     # the conversion above found them by reading their headers. Link them under
     # names it recognises so any naming works here too.
-    linked = work_dir / "linked"
-    if linked.is_dir():
-        shutil.rmtree(linked)
-    linked.mkdir(parents=True)
-    for nuclide, path in sources.items():
-        (linked / tendl_filename(nuclide)).symlink_to(path.resolve())
-
+    #
+    # The farm goes in a temporary directory, not anywhere under the tree being
+    # converted. Left on disk beside the evaluations it points at, the NEXT
+    # foil's `scan` walks both the real file and the symlink to it, calls that
+    # nuclide a duplicate, and refuses to convert at all. That is a directory
+    # layout deciding whether a conversion works, which it should not be.
     print(f"BRANCH: isomeric branching for {len(sources)} parents")
-    _, stats = convert_branching(
-        out_root,
-        neutron_dir=linked,
-        nuclides=sorted(sources),
-        decay_dir=decay_dir,
-        library=library,
-        decay_library=DECAY_LIBRARY,
-    )
+    with tempfile.TemporaryDirectory(prefix="yats-branching-") as scratch:
+        linked = pathlib.Path(scratch) / "linked"
+        linked.mkdir(parents=True)
+        for nuclide, path in sources.items():
+            (linked / tendl_filename(nuclide)).symlink_to(path.resolve())
+
+        _, stats = convert_branching(
+            out_root,
+            neutron_dir=linked,
+            nuclides=sorted(sources),
+            decay_dir=decay_dir,
+            library=library,
+            decay_library=DECAY_LIBRARY,
+        )
     interesting = {k: v for k, v in stats.items() if isinstance(v, int) and v}
     print(f"        {interesting} -> {out_root}")
     return out_root
@@ -361,13 +381,17 @@ def main():
     parser.add_argument("--endf-dir", type=pathlib.Path,
                         help="directory of ENDF files, searched recursively; "
                              "also read from $ENDF_DIR")
-    parser.add_argument("--library", default="tendl-2025",
-                        help="library name stamped into the Arrow output "
-                             "(default: tendl-2025)")
-    parser.add_argument("--output", type=pathlib.Path, default=HERE / "data" / "neutron",
-                        help="where the .arrow directories go")
-    parser.add_argument("--chain", type=pathlib.Path, default=HERE / "data" / "chain",
-                        help="where the branching and reaction subsections go")
+    parser.add_argument("--library", default=data_source.DEFAULT_LIBRARY,
+                        help="library name stamped into the Arrow output, and the "
+                             "one downloaded without --endf-dir/--tarball. "
+                             f"Downloadable: {', '.join(sorted(data_source.TENDL_TARBALLS))} "
+                             f"(default: {data_source.DEFAULT_LIBRARY})")
+    parser.add_argument("--output", type=pathlib.Path, default=None,
+                        help="where the .arrow directories go "
+                             "(default: data/<source>/neutron)")
+    parser.add_argument("--chain", type=pathlib.Path, default=None,
+                        help="where the branching and reaction subsections go "
+                             "(default: data/<source>/chain)")
     parser.add_argument("--tarball", type=pathlib.Path,
                         help="local TENDL-n.tgz, used only without --endf-dir")
     parser.add_argument("--temperature", type=float, default=294.0, help="Kelvin (default: 294)")
@@ -380,6 +404,9 @@ def main():
     parser.add_argument("--no-reactions", action="store_true",
                         help="skip the reaction topology subsection")
     parser.add_argument("--force", action="store_true", help="reconvert files that already exist")
+    parser.add_argument("--source", default=None,
+                        help="folder name to file this run's data and results under "
+                             "(default: the library name, or the --endf-dir directory name)")
     args = parser.parse_args()
 
     import nuclear_data_to_arrow as converter
@@ -407,12 +434,22 @@ def main():
     if endf_dir is None and os.environ.get("ENDF_DIR"):
         endf_dir = pathlib.Path(os.environ["ENDF_DIR"])
 
+    # Everything this run writes goes under the name of the data it used, so a
+    # second library cannot overwrite the first one's files (see data_source).
+    source = data_source.slug(args.library, endf_dir, args.source)
+    work_dir = HERE / "data" / source
+    if args.output is None:
+        args.output = work_dir / "neutron"
+    if args.chain is None:
+        args.chain = work_dir / "chain"
+    print(f"SOURCE: {source} (data/{source}, results/{source})")
+
     if endf_dir is not None:
         if not endf_dir.is_dir():
             raise SystemExit(f"--endf-dir {endf_dir} is not a directory")
         sources = scan(endf_dir, wanted)
     else:
-        sources = fetch_tendl(args.tarball, HERE / "data" / "endf", wanted)
+        sources = fetch_tendl(args.tarball, work_dir / "endf", wanted, args.library)
 
     out_dir = args.output
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -444,7 +481,7 @@ def main():
         if args.no_branching:
             print("\nBRANCH: skipped, so isomer-dominated foils (Nb, Ag, W) will be wrong")
         else:
-            build_branching(sources, decay_dir, args.chain, args.library, HERE / "data")
+            build_branching(sources, decay_dir, args.chain, args.library, work_dir)
         if args.no_reactions:
             print("REACT: skipped, so the network topology stays on " + DECAY_LIBRARY)
         else:

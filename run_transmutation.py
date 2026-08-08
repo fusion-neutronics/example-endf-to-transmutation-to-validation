@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import yats  # noqa: E402
 
+import data_source  # noqa: E402
 import fns_case  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -108,7 +109,29 @@ def run(case, cross_sections, chain):
         contributions = state.decay_heat(by_nuclide=True)
         heat.append(sum(contributions.values()) / case.mass_g * 1e6)
         breakdown.append(contributions)
-    return np.array(heat), breakdown
+    heat = np.array(heat)
+
+    # An irradiated foil always activates, so heat that is identically zero
+    # means the network produced nothing at all. It used to be reported as
+    # C/E 0.000, which reads like a physics result rather than the wiring
+    # mistake it invariably is, and a sweep would log it foil after foil
+    # without ever failing. It is an error here instead.
+    #
+    # The chain is the usual suspect: it is rebuilt per foil and scoped to that
+    # foil's isotopes, so one built for a different foil leaves these nuclides
+    # with no reactions. A chain from an older converter, or cross sections that
+    # do not cover the material, will do it too.
+    if not heat.any():
+        raise SystemExit(
+            f"{case.name}: every cooling step came out at zero decay heat, so the "
+            f"transmutation produced no activation products.\n"
+            f"  chain:          {chain}\n"
+            f"  cross sections: {cross_sections}\n"
+            f"Rebuild both for this foil and try again:\n"
+            f"  python convert_to_arrow.py --case {case.name} "
+            f"--output {cross_sections} --chain {chain}"
+        )
+    return heat, breakdown
 
 
 def summarise(case, calculated):
@@ -196,15 +219,36 @@ def main():
     parser.add_argument("--experiment", help="which experiment (default: 2000exp_5min)")
     parser.add_argument("--fns-data", type=pathlib.Path, default=None,
                         help="benchmark JSON (default: ./fns_data.json)")
-    parser.add_argument("--cross-sections", type=pathlib.Path,
-                        default=HERE / "data" / "neutron",
-                        help="Arrow directory from convert_to_arrow.py")
-    parser.add_argument("--chain", type=pathlib.Path, default=HERE / "data" / "chain",
-                        help="branching subsection from convert_to_arrow.py")
-    parser.add_argument("--output", type=pathlib.Path, default=HERE / "results")
+    parser.add_argument("--library", default=data_source.DEFAULT_LIBRARY,
+                        help="which data build to read and where to write results "
+                             f"(default: {data_source.DEFAULT_LIBRARY})")
+    parser.add_argument("--endf-dir", type=pathlib.Path,
+                        help="names the build made from your own evaluations, so the "
+                             "defaults below point at it")
+    parser.add_argument("--cross-sections", type=pathlib.Path, default=None,
+                        help="Arrow directory from convert_to_arrow.py "
+                             "(default: data/<source>/neutron)")
+    parser.add_argument("--chain", type=pathlib.Path, default=None,
+                        help="branching subsection from convert_to_arrow.py "
+                             "(default: data/<source>/chain)")
+    parser.add_argument("--output", type=pathlib.Path, default=None,
+                        help="where the results go (default: results/<source>)")
     parser.add_argument("--list", action="store_true",
                         help="list the available foils and experiments, then exit")
+    parser.add_argument("--source", default=None,
+                        help="folder name to file this run's data and results under "
+                             "(default: the library name, or the --endf-dir directory name)")
     args = parser.parse_args()
+
+    # Results and inputs live under the name of the nuclear data they came from,
+    # so two libraries do not overwrite each other (see data_source).
+    source = data_source.slug(args.library, args.endf_dir, args.source)
+    if args.cross_sections is None:
+        args.cross_sections = HERE / "data" / source / "neutron"
+    if args.chain is None:
+        args.chain = HERE / "data" / source / "chain"
+    if args.output is None:
+        args.output = HERE / "results" / source
 
     if args.list:
         for name in fns_case.cases(args.fns_data):

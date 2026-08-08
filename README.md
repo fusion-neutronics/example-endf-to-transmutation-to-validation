@@ -95,19 +95,54 @@ stops rather than guessing.
 `--library` is the name stamped into the Arrow output, so set it to whatever
 you are actually converting. `$ENDF_DIR` works in place of `--endf-dir`.
 
-With no `--endf-dir` it fetches TENDL-2025 for you:
+With no `--endf-dir` it fetches the library `--library` names, for you:
 
 ```bash
-python convert_to_arrow.py           # streams TENDL-n.tgz from tendl.imperial.ac.uk
+python convert_to_arrow.py                          # TENDL-2025, the default
+python convert_to_arrow.py --library tendl-2017     # or TENDL-2017
 ```
 
-The last form transfers 3.5 GB whatever you asked for, because TENDL publishes
-its neutron sublibrary as a single archive; only the wanted members are written
-to disk. Conversion runs about twenty seconds per isotope and the results are
-cached, so the second run of the script does nothing.
+The two archives are laid out differently inside, TENDL-2025 flat at the root
+and TENDL-2017 nested under `neutron_file/<El>/<El><A>/lib/endf/`, which costs
+you nothing: evaluations are matched on their filename wherever they sit.
 
-`run_transmutation.py` writes `results/fns_<case>_<experiment>.png` and a JSON
-of the same numbers, including the per-nuclide breakdown of the heat.
+The last form transfers around 3 GB whatever you asked for, because TENDL
+publishes its neutron sublibrary as a single archive; only the wanted members
+are written to disk. Conversion runs about twenty seconds per isotope and the
+results are cached, so the second run of the script does nothing.
+
+`run_transmutation.py` writes `results/<source>/fns_<case>_<experiment>.png` and
+a JSON of the same numbers, including the per-nuclide breakdown of the heat.
+
+### One folder per library
+
+Everything a run produces is filed under the nuclear data it came from:
+`data/tendl-2017/`, `results/tendl-2025/`, and so on. Evaluations of your own
+are filed under the directory they came from, and `--source` overrides the name
+when the directory is not what you want it called:
+
+```bash
+python sweep_fns.py --library tendl-2017 --endf-dir data/tendl-2017-endf
+python sweep_fns.py --library tendl-2025 --source tendl-2025 \
+    --endf-dir /path/to/a/directory/called/something/else
+```
+
+This is not tidiness. TENDL names its evaluations identically in every release,
+so `n-Fe056.tendl` from 2017 and from 2025 are the same filename. Unpacked into
+one directory the second library silently reuses the first one's files, and a
+run you believe is TENDL-2017 reports TENDL-2025 numbers.
+
+### Comparing two libraries
+
+```bash
+python compare_libraries.py tendl-2017 tendl-2025
+```
+
+Pairs the two sweeps foil by foil on `|C/E - 1|`. A foil only one library
+managed is excluded rather than counted as a loss for the other, and a
+difference smaller than that foil's measurement sigma is called a tie, because
+most of these foils agree within it and a difference below sigma is not a
+result.
 
 ## What comes out
 
