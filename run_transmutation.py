@@ -13,8 +13,8 @@ gives off as the activation products decay.
 Everything about the case (composition, density, flux, spectrum, schedule and
 the measurement) comes from `fns_data.json`. Cross sections come from the Arrow
 directory convert_to_arrow.py produced, which has to hold the same foil's
-isotopes. Decay data and the reaction network come from endf-b8.1, which yats
-downloads on first use.
+isotopes, as do the reaction topology and isomeric branching. Decay data comes
+from endf-b8.1, which yats downloads on first use.
 
 There is no transport here: the measured spectrum is the input, and yats
 collapses it against the cross sections to get one-group reaction rates, then
@@ -39,29 +39,44 @@ HERE = pathlib.Path(__file__).resolve().parent
 # The temperature the cross sections were broadened to by convert_to_arrow.py.
 TEMPERATURE = 294.0
 
-# Decay data, decay energies and the reaction network. Held on endf-b8.1
-# because TENDL publishes no decay sublibrary.
+# Half-lives, decay modes and decay energies, and the fallback for anything
+# convert_to_arrow.py did not write. Held on endf-b8.1 because TENDL publishes
+# no decay sublibrary.
 DECAY_LIBRARY = "endf-b8.1"
+
+
+def subsections_of(chain):
+    """Which chain subsections convert_to_arrow.py wrote, from the manifest."""
+    if chain is None or not (chain / "manifest.json").is_file():
+        return set()
+    return set(json.loads((chain / "manifest.json").read_text()).get("subsections", {}))
 
 
 def run(case, cross_sections, chain):
     """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
     yats.cross_section_data = str(cross_sections)
     yats.transmutation_decay_data = DECAY_LIBRARY
-    yats.transmutation_reactions = DECAY_LIBRARY
     yats.transmutation_fission_yields = DECAY_LIBRARY
 
-    # Isomeric branching is the one part of the network that has to move with
-    # the cross sections. Whether an (n,2n) lands in the metastable state is
-    # energy dependent, and for foils whose heat comes from an isomer it decides
-    # the answer. convert_to_arrow.py extracts it from the same evaluations.
-    if chain is not None and chain.is_dir():
-        yats.transmutation_branch_ratios = str(chain)
-        print(f"branching: {chain}")
-    else:
-        yats.transmutation_branch_ratios = DECAY_LIBRARY
-        print(f"branching: {DECAY_LIBRARY} (isomer-dominated foils will be off; "
-              "rerun convert_to_arrow.py without --no-branching)")
+    # Everything a neutron evaluation states is taken from the one the cross
+    # sections came from, so that the whole reaction side of the network moves
+    # together when the library changes. That is the topology (which reaction
+    # on which parent gives which product) and the isomeric branching (which
+    # state it lands in, which is energy dependent and decides the answer
+    # outright for foils whose heat comes from an isomer).
+    have = subsections_of(chain)
+    for subsection, setting, warning in [
+        ("branching", "transmutation_branch_ratios",
+         "isomer-dominated foils will be off; rerun without --no-branching"),
+        ("reactions", "transmutation_reactions",
+         "fewer production channels; rerun without --no-reactions"),
+    ]:
+        if subsection in have:
+            setattr(yats, setting, str(chain))
+            print(f"{subsection}: {chain}")
+        else:
+            setattr(yats, setting, DECAY_LIBRARY)
+            print(f"{subsection}: {DECAY_LIBRARY} ({warning})")
 
     # The histogram is a shape; the pulse rate carries the magnitude.
     spectrum = yats.NeutronSource(
