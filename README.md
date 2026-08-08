@@ -112,16 +112,16 @@ of the same numbers, including the per-nuclide breakdown of the heat.
 
 ## What comes out
 
-For iron on the default experiment, yats tracks the measurement to 5.7% mean
+For iron on the default experiment, yats tracks the measurement to 6.0% mean
 deviation, starting on top of it and drifting high by the end of the hour, with
-a median C/E of 1.061 against a measurement whose own median sigma is 5.4%. Run
+a median C/E of 1.064 against a measurement whose own median sigma is 5.4%. Run
 the same iron against `1996exp_5min` and it comes out low instead, median C/E
-0.924 for 7.6%. The two campaigns bracket the calculation, which is a fair
+0.927 for 7.3%. The two campaigns bracket the calculation, which is a fair
 reminder that a single C/E number is a statement about one measurement and not
 only about the data.
 
 The breakdown says why the shape is what it is. Mn56 from Fe56(n,p), half-life
-2.58 hours, is 81% of the heat at the first point and 99.9% at the last. The
+2.58 hours, is 78% of the heat at the first point and 99.9% at the last. The
 rest of the early heat is Mn57 and Fe53, both of which are gone within minutes,
 so the first few points test three cross sections and the tail tests one.
 
@@ -134,39 +134,59 @@ python convert_to_arrow.py --endf-dir /path/to/endfb-8.1 --library endf-b8.1 \
 python run_transmutation.py --cross-sections data/b81 --output results/b81
 ```
 
-### Foils whose heat comes from an isomer
+### What else comes out of the same evaluations
 
-`convert_to_arrow.py` writes two things, not one: the cross sections, and a
-`branching/` subsection under `data/chain/`. The second is what decides how much
-of an (n,2n) leaves the product in its metastable state rather than its ground
-state. That fraction is energy dependent, it lives in MF=8/9/10 of the same
-neutron evaluations, and for some foils it is the entire answer.
+`convert_to_arrow.py` writes three things, not one. The cross sections, and two
+subsections under `data/chain/`:
 
-Measured on `2000exp_5min`, mean deviation with the branching subsection taken
-from the same library as the cross sections against taken from endf-b8.1, and
-against the same benchmark run through the full TENDL-2025 chain:
+* `branching/`, which decides how much of an (n,2n) leaves the product in its
+  metastable state rather than its ground state. That fraction is energy
+  dependent, it lives in MF=8/9/10 of the same neutron evaluations, and for some
+  foils it is the entire answer.
+* `reactions/`, the network topology: which reaction on which parent gives which
+  product, and the Q value of each. An evaluation states this outright, in the
+  MT numbers it carries. TENDL-2025 gives Fe56 25 reaction channels where the
+  endf-b8.1 chain gives 5, and W184 27 against 9.
 
-| case | branching from endf-b8.1 | branching from TENDL-2025 | full TENDL-2025 chain | dominant product |
+Both matter for the same reason: every part of the answer that comes from
+somewhere other than the library under test makes the C/E harder to read. Mean
+deviation against the measurement on `2000exp_5min`, moving one subsection at a
+time off endf-b8.1 and onto the library the cross sections came from:
+
+| case | chain from endf-b8.1 | + branching | + topology | dominant product |
 |---|---|---|---|---|
-| Ti | 2.4% | **2.2%** | 2.2% | Sc50 |
-| Fe | 5.3% | **5.7%** | 6.0% | Mn56 |
-| Ag | 69.7% | **9.0%** | 9.0% | Ag108 |
-| Nb | 81.4% | **10.8%** | 10.8% | **Nb94m**, 92% of the heat |
-| W | 75.9% | **121.5%** | 122.0% | **W185m**, 97% of the heat |
+| Ti | 2.4% | 2.2% | **2.2%** | Sc50 |
+| Fe | 5.3% | 5.7% | **6.0%** | Mn56 |
+| Ag | 69.7% | 9.0% | **9.0%** | Ag108 |
+| Nb | 81.4% | 10.8% | **10.8%** | **Nb94m**, 92% of the heat |
+| W | 75.9% | 121.5% | **122.0%** | **W185m**, 97% of the heat |
 
-Nb goes from 6x low to agreeing, Ag from 70% out to 9%, and the ground-state
-foils barely move, which is the tell: the branching data only matters where an
-isomer carries the heat. In every case the example now lands on the full chain's
-answer, including W, where 122% is a real TENDL-2025 problem and not an artefact
-of this example. TENDL-2017 gives 84.5% on the same foil.
+Note which way some of these move. Fe gets worse at every step, and the last
+column is the honest number for TENDL-2025 on iron precisely because it is the
+one with the least endf-b8.1 left in it. A blend that happens to agree better
+with the measurement is not evidence about either library.
 
-The subsection is built from the foil's own isotopes, which covers the reactions
-that matter for a single 5 minute irradiation but is not the whole chain. It
-needs decay data to map a product's nuclear level to its metastable state, so
-the first run fetches the ENDF/B-8.1 decay sublibrary (10.6 MB, of which only
-the 738 metastable evaluations are read) into `data/decay/`. Point `--decay-dir`
-at a copy you already have, or pass `--no-branching` to skip it and get the
-first column back.
+The branching does the heavy lifting. Nb goes from 6x low to agreeing, Ag from
+70% out to 9%, and the ground-state foils barely move, which is the tell: it
+only matters where an isomer carries the heat. Read the first column as an
+artefact and not as an endf-b8.1 result, because it pairs one library's
+branching with another's cross sections.
+
+The topology is worth much less on these five. The channels it adds are mostly
+minor routes to products the foil already makes: iron's extra 20 channels move
+the heat by 0.3%, all of it more Mn56 and Mn57 arriving by (n,d) and (n,np) on
+Fe57 rather than only by (n,p) on Fe56, and tungsten's move it by up to 0.8%,
+mostly more Ta185. Ti, Ag and Nb do not move at the printed precision. It is
+worth doing anyway because it is one more thing the answer no longer borrows,
+and on a foil whose heat runs through an unusual channel it would not be small.
+
+Both subsections are built from the foil's own isotopes, which covers the
+reactions that matter for a single 5 minute irradiation but is not the whole
+chain. Both need decay data, branching to map a product's nuclear level to its
+metastable state and the topology to know which nuclides exist, so the first run
+fetches the ENDF/B-8.1 decay sublibrary (10.6 MB, 68 MB unpacked) into
+`data/decay/`. Point `--decay-dir` at a copy you already have, or pass
+`--no-branching` and `--no-reactions` to skip either and walk the columns back.
 
 ## The experiment
 
@@ -218,18 +238,44 @@ times makes the comparison exact at every point for all 132 experiments.
 
 ## Which library supplies what
 
-TENDL is a neutron-reaction library. It has no decay sublibrary, so it cannot
-say how long Mn56 lives or how much energy each decay releases, and it cannot
-on its own define the transmutation network.
+TENDL is a neutron-reaction library. Its sublibraries are neutron, proton,
+deuteron, triton, He3, alpha, gamma, fission yields and thermal scattering.
+There is no decay sublibrary, so it cannot say how long Mn56 lives or how much
+energy each decay releases.
 
 * From your library, converted here: the **reaction cross sections**, which set
-  how fast each product is made, and the **isomeric branching**, which sets
-  which state it is made in. Both come out of the same neutron evaluations, so
-  both move together when you change library.
-* From endf-b8.1, downloaded by yats on first use: the **decay data**, the
-  **decay energies**, and the **reaction network** that says which reaction on
-  which parent gives which product.
+  how fast each product is made, the **isomeric branching**, which sets which
+  state it is made in, and the **reaction topology**, which says which reaction
+  on which parent gives which product at all. All three come out of the same
+  neutron evaluations, so all three move together when you change library.
+* From endf-b8.1, downloaded by yats on first use: the **decay data**, meaning
+  half-lives, decay modes and **decay energies**.
 
-The split is not arbitrary. The first group is what a neutron evaluation knows
-and the second is what it does not, so this is the most of a library swap that
-TENDL can actually express.
+The split is not arbitrary, and it is drawn where the data runs out rather than
+where it was convenient. The first group is everything a neutron evaluation
+states and the second is what no neutron evaluation can, so this is the most of
+a library swap that TENDL is able to express.
+
+Fission yields are the one thing TENDL does publish that is not used here: none
+of the 73 FNS foils is fissionable, so the subsection is never built.
+
+### So what is a C/E here a statement about
+
+Decay heat at time t is a sum over products of N(t) x lambda x Q. The library
+under test sets N, how much of each product got made; endf-b8.1 sets lambda and
+Q, how fast it decays and how much energy that releases. A C/E is therefore a
+statement about production rates, measured against fixed decay data.
+
+That is the useful decomposition for judging a neutron library, and it is worth
+being explicit about because the measured quantity is decay heat, so the decay
+energies scale the answer directly. Two consequences follow:
+
+* A foil is only as good a test as its decay data is settled. Where the heat
+  runs through one well known product, as iron's does through Mn56, the C/E is
+  a clean read on one cross section. Where it does not, some of the deviation
+  belongs to endf-b8.1.
+* Changing library changes only N, so two libraries run through this example
+  are compared like for like. W is the example worth looking at: TENDL-2025
+  gives 122% and TENDL-2017 gives 84.5% on the same foil, against the same
+  decay data, and 97% of that heat is W185m. That is a statement about how much
+  W185m each library makes, and nothing else.
