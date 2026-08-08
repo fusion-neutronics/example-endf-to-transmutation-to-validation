@@ -22,17 +22,18 @@ With no ``--endf-dir`` it falls back to fetching TENDL-2025, either from
 download is 3.5 GB however few nuclides are wanted, because TENDL publishes its
 neutron sublibrary as a single archive.
 
-Two things come out of the chosen library: the reaction cross sections, and the
-isomeric branching that says which state each product is made in. The rest of
-the transmutation network (decay constants, decay energies, which reaction
-leads to which product) comes from endf-b8.1, because a neutron-reaction
-library does not carry it.
+Three things come out of the chosen library: the reaction cross sections, the
+isomeric branching that says which state each product is made in, and the
+reaction topology that says which reaction on which parent gives which product.
+What is left on endf-b8.1 is the decay data (half-lives, decay modes, decay
+energies), because no neutron-reaction library carries it.
 
-Building the branching subsection needs decay data to map a product's nuclear
-level to its metastable state, so the first run fetches the ENDF/B-8.1 decay
-sublibrary. ``--decay-dir`` uses a copy you already have; ``--no-branching``
-skips it, at the cost of being wrong by up to 6x on foils whose decay heat
-comes from an isomer.
+Both chain subsections need that decay data anyway, branching to map a
+product's nuclear level to its metastable state and the topology to know which
+nuclides exist, so the first run fetches the ENDF/B-8.1 decay sublibrary.
+``--decay-dir`` uses a copy you already have. ``--no-branching`` skips the
+branching, at the cost of being wrong by up to 6x on foils whose decay heat
+comes from an isomer, and ``--no-reactions`` leaves the topology on endf-b8.1.
 """
 
 import argparse
@@ -54,14 +55,15 @@ HERE = pathlib.Path(__file__).resolve().parent
 
 TARBALL_URL = "https://tendl.imperial.ac.uk/tendl_2025/tar_files/TENDL-n.tgz"
 
-# Building the isomeric branching subsection needs decay data, to say which
-# nuclear level of an (n,2n) product is which metastable state. Only the 738
-# metastable evaluations are read, and the whole sublibrary is 10.6 MB, so it
+# Both chain subsections need decay data: branching to say which nuclear level
+# of an (n,2n) product is which metastable state, and the reaction topology to
+# know which nuclides exist at all. The sublibrary is a 10.6 MB download, so it
 # is fetched rather than made a prerequisite.
 DECAY_URL = ("https://www.nndc.bnl.gov/endf-releases/releases/B-VIII.1/"
              "decay/decay-version.VIII.1.tar.gz")
 DECAY_LIBRARY = "endf-b8.1"
-DECAY_GLOB = "dec-*m[0-9].endf"
+DECAY_GLOB = "dec-*.endf"
+DECAY_ISOMER_GLOB = "dec-*m[0-9].endf"
 
 # ENDF is a fixed-column format: six 11-character fields, then MAT, MF, MT.
 _FIELD = [slice(0, 11), slice(11, 22), slice(22, 33), slice(33, 44)]
@@ -207,24 +209,38 @@ def fetch_tendl(tarball, work_dir, nuclides):
     return resolved
 
 
-def fetch_decay(decay_dir, work_dir):
-    """A directory holding the metastable decay evaluations.
+def _is_whole_sublibrary(directory):
+    """Whether a decay directory holds more than the metastable evaluations.
 
-    Uses `decay_dir` if it already has them, otherwise pulls the ENDF/B-8.1
-    decay sublibrary and keeps only the metastable files, which are the only
-    ones the isomer table is built from.
+    Earlier versions of this script kept only the metastable files, which is
+    all the isomer table reads. The reaction topology needs the whole
+    sublibrary, so a directory left behind by one of those runs has to be
+    filled in rather than trusted.
+    """
+    return any(not fnmatch.fnmatch(path.name, DECAY_ISOMER_GLOB)
+               for path in directory.glob(DECAY_GLOB))
+
+
+def fetch_decay(decay_dir, work_dir):
+    """A directory holding the ENDF/B-8.1 decay sublibrary.
+
+    Uses `decay_dir` if it already has one, otherwise pulls it. The isomer
+    table reads only the 738 metastable evaluations, but the reaction topology
+    needs every nuclide the network can reach, so all of them are kept.
     """
     if decay_dir is not None:
-        if not sorted(pathlib.Path(decay_dir).glob(DECAY_GLOB)):
-            raise SystemExit(f"--decay-dir {decay_dir} holds no {DECAY_GLOB} files")
-        return pathlib.Path(decay_dir)
+        decay_dir = pathlib.Path(decay_dir)
+        if not _is_whole_sublibrary(decay_dir):
+            raise SystemExit(f"--decay-dir {decay_dir} holds no {DECAY_GLOB} files, "
+                             "or holds only the metastable ones")
+        return decay_dir
 
     work_dir.mkdir(parents=True, exist_ok=True)
-    if sorted(work_dir.glob(DECAY_GLOB)):
+    if _is_whole_sublibrary(work_dir):
         return work_dir
 
     print(f"DECAY: fetching {DECAY_URL}")
-    print("       (10.6 MB, keeping the metastable evaluations)")
+    print("       (10.6 MB, 68 MB unpacked)")
     kept = 0
     with urllib.request.urlopen(DECAY_URL) as response:
         with tarfile.open(fileobj=response, mode="r|gz") as tar:
@@ -238,7 +254,7 @@ def fetch_decay(decay_dir, work_dir):
                 kept += 1
     if not kept:
         raise SystemExit(f"no {DECAY_GLOB} files in {DECAY_URL}")
-    print(f"       {kept} metastable evaluations in {work_dir}")
+    print(f"       {kept} evaluations in {work_dir}")
     return work_dir
 
 
@@ -282,6 +298,40 @@ def build_branching(sources, decay_dir, out_root, library, work_dir):
     return out_root
 
 
+def build_reactions(sources, decay_dir, out_root, library):
+    """Write a `reactions/` subsection: the network topology, from your library.
+
+    Which reaction on which parent gives which product, and the Q value of
+    each, is something a neutron evaluation states directly, in the MT numbers
+    it carries and their MF=3 headers. Taking it from the same files as the
+    cross sections keeps the channel list and the rates consistent, and it is
+    a much longer list: TENDL-2025 gives Fe56 25 reaction channels where the
+    endf-b8.1 chain gives 5.
+
+    Only the topology comes from the neutron files. Half-lives, decay modes and
+    decay energies are read from `decay_dir` and stay on endf-b8.1, because no
+    neutron-reaction library has them. Fission yields are not built at all;
+    none of the FNS foils is fissionable.
+
+    Scoped to the foil's own isotopes, for the same reason the branching is:
+    one 5 minute irradiation at 1e10 n/cm2/s barely burns the products, so the
+    parents that matter are the ones the foil started as.
+    """
+    from nuclear_data_to_arrow import convert_transmutation
+
+    print(f"REACT: reaction topology for {len(sources)} parents")
+    convert_transmutation(
+        out_root,
+        decay_files=sorted(decay_dir.glob(DECAY_GLOB)),
+        fpy_files=[],
+        neutron_files=[path.resolve() for _, path in sorted(sources.items())],
+        library=library,
+        subsections=["reactions"],
+    )
+    print(f"        -> {out_root}")
+    return out_root
+
+
 def _extract(tar, members, dest):
     """Write just `members` out of an open tar, streaming-safe (no seeking)."""
     remaining = set(members)
@@ -317,7 +367,7 @@ def main():
     parser.add_argument("--output", type=pathlib.Path, default=HERE / "data" / "neutron",
                         help="where the .arrow directories go")
     parser.add_argument("--chain", type=pathlib.Path, default=HERE / "data" / "chain",
-                        help="where the branching subsection goes")
+                        help="where the branching and reaction subsections go")
     parser.add_argument("--tarball", type=pathlib.Path,
                         help="local TENDL-n.tgz, used only without --endf-dir")
     parser.add_argument("--temperature", type=float, default=294.0, help="Kelvin (default: 294)")
@@ -327,6 +377,8 @@ def main():
                         help="ENDF decay files for the isomer table; downloaded if absent")
     parser.add_argument("--no-branching", action="store_true",
                         help="skip the isomeric branching subsection")
+    parser.add_argument("--no-reactions", action="store_true",
+                        help="skip the reaction topology subsection")
     parser.add_argument("--force", action="store_true", help="reconvert files that already exist")
     args = parser.parse_args()
 
@@ -385,11 +437,18 @@ def main():
         size = sum(f.stat().st_size for f in target.rglob("*")) / 1e6
         print(f"{name}: {time.perf_counter() - start:.0f} s, {size:.1f} MB -> {target}")
 
-    if args.no_branching:
-        print("\nBRANCH: skipped, so isomer-dominated foils (Nb, Ag, W) will be wrong")
+    if args.no_branching and args.no_reactions:
+        print("\nCHAIN: skipped, so isomer-dominated foils (Nb, Ag, W) will be wrong")
     else:
-        build_branching(sources, fetch_decay(args.decay_dir, HERE / "data" / "decay"),
-                        args.chain, args.library, HERE / "data")
+        decay_dir = fetch_decay(args.decay_dir, HERE / "data" / "decay")
+        if args.no_branching:
+            print("\nBRANCH: skipped, so isomer-dominated foils (Nb, Ag, W) will be wrong")
+        else:
+            build_branching(sources, decay_dir, args.chain, args.library, HERE / "data")
+        if args.no_reactions:
+            print("REACT: skipped, so the network topology stays on " + DECAY_LIBRARY)
+        else:
+            build_reactions(sources, decay_dir, args.chain, args.library)
 
     print(f"\nArrow cross sections in {out_dir}")
     print(f"Next: python run_transmutation.py --case {args.case}"
