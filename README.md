@@ -31,6 +31,18 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+That is the whole install, and it no longer needs a checkout of anything.
+`yats` both reads the nuclear data and makes it: the ENDF conversion, the
+reaction topology and the isomeric branching are all functions on the wheel.
+
+NJOY is the one external tool left, and no library in any language avoids it:
+an ENDF evaluation describes the resonance region with parameters rather than
+pointwise cross sections, so something has to reconstruct and Doppler broaden
+it. `requirements.txt` pulls the `njoy2016` wheel, which puts an `njoy` in the
+venv. Use a build of your own with `--njoy`, which is also how to point at the
+IAEA-NDS fork that FENDL needs; both builds succeed, so the wrong choice is
+quiet.
+
 ## Run
 
 ```bash
