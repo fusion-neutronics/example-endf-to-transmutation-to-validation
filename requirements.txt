@@ -9,7 +9,15 @@ njoy2016
 # reaction topology and the isomeric branching are all functions on the wheel.
 # Nothing here resolves against a sibling checkout, and there is no `endf`
 # package pinned to a branch of a fork.
-yats
+#
+# Installed from git, NOT from PyPI. `pip install yats` there fetches "a fast
+# lightweight Twitter scraper" (yats 1.0.1, 2021, an unrelated project that
+# holds the name), which installs happily and then has no convert_* functions,
+# so the failure arrives later as a baffling AttributeError. See
+# fusion-neutronics/yamc#444.
+yats @ git+https://github.com/fusion-neutronics/yamc.git#subdirectory=packages/yats
 
+# The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
+# numpy is not listed separately: one line fewer to read, and there is no
+# arrangement of these two where matplotlib is installed and numpy is not.
 matplotlib
-numpy

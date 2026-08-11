@@ -35,6 +35,10 @@ That is the whole install, and it no longer needs a checkout of anything.
 `yats` both reads the nuclear data and makes it: the ENDF conversion, the
 reaction topology and the isomeric branching are all functions on the wheel.
 
+It installs from git rather than PyPI, and deliberately: the name `yats` on
+PyPI belongs to an unrelated Twitter scraper, so `pip install yats` succeeds
+and gives you a package with none of these functions.
+
 NJOY is the one external tool left, and no library in any language avoids it:
 an ENDF evaluation describes the resonance region with parameters rather than
 pointwise cross sections, so something has to reconstruct and Doppler broaden
