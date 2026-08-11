@@ -57,6 +57,7 @@ import urllib.request
 
 import data_source
 import fns_case
+import yats
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -86,8 +87,6 @@ def isotopes_for(elements):
     Taken from yats rather than a table kept here, so the isotopes converted
     are exactly the ones yats will expand the material into.
     """
-    import yats
-
     by_element = yats.data.element_nuclides()
     abundance = yats.data.natural_abundance()
     wanted = {}
@@ -273,7 +272,7 @@ def fetch_decay(decay_dir, work_dir):
     return work_dir
 
 
-def build_branching(sources, decay_dir, out_root, library, work_dir):
+def build_branching(sources, decay_dir, out_root, library):
     """Write a `branching/` subsection from the same evaluations as the rates.
 
     Which fraction of an (n,2n) leaves the product in its metastable state
@@ -286,33 +285,13 @@ def build_branching(sources, decay_dir, out_root, library, work_dir):
     here, since one 5 minute irradiation barely burns the products, but it is
     not the whole chain.
     """
-    from nuclear_data_to_arrow import convert_branching
-    from nuclear_data_to_arrow.branching_extractor import tendl_filename
-
-    # The extractor locates evaluations by TENDL/ENDF-B/JEFF filename, while
-    # the conversion above found them by reading their headers. Link them under
-    # names it recognises so any naming works here too.
-    #
-    # The farm goes in a temporary directory, not anywhere under the tree being
-    # converted. Left on disk beside the evaluations it points at, the NEXT
-    # foil's `scan` walks both the real file and the symlink to it, calls that
-    # nuclide a duplicate, and refuses to convert at all. That is a directory
-    # layout deciding whether a conversion works, which it should not be.
     print(f"BRANCH: isomeric branching for {len(sources)} parents")
-    with tempfile.TemporaryDirectory(prefix="yats-branching-") as scratch:
-        linked = pathlib.Path(scratch) / "linked"
-        linked.mkdir(parents=True)
-        for nuclide, path in sources.items():
-            (linked / tendl_filename(nuclide)).symlink_to(path.resolve())
-
-        _, stats = convert_branching(
-            out_root,
-            neutron_dir=linked,
-            nuclides=sorted(sources),
-            decay_dir=decay_dir,
-            library=library,
-            decay_library=DECAY_LIBRARY,
-        )
+    stats = yats.convert_branching(
+        neutron_files=[str(path.resolve()) for _, path in sorted(sources.items())],
+        decay_files=[str(p) for p in sorted(decay_dir.glob(DECAY_GLOB))],
+        output_path=str(out_root),
+        library=library,
+    )
     interesting = {k: v for k, v in stats.items() if isinstance(v, int) and v}
     print(f"        {interesting} -> {out_root}")
     return out_root
@@ -337,14 +316,12 @@ def build_reactions(sources, decay_dir, out_root, library):
     one 5 minute irradiation at 1e10 n/cm2/s barely burns the products, so the
     parents that matter are the ones the foil started as.
     """
-    from nuclear_data_to_arrow import convert_transmutation
-
     print(f"REACT: reaction topology for {len(sources)} parents")
-    convert_transmutation(
-        out_root,
-        decay_files=sorted(decay_dir.glob(DECAY_GLOB)),
+    yats.convert_transmutation(
+        decay_files=[str(p) for p in sorted(decay_dir.glob(DECAY_GLOB))],
         fpy_files=[],
-        neutron_files=[path.resolve() for _, path in sorted(sources.items())],
+        neutron_files=[str(path.resolve()) for _, path in sorted(sources.items())],
+        output_path=str(out_root),
         library=library,
         subsections=["reactions"],
     )
@@ -409,8 +386,6 @@ def main():
                              "(default: the library name, or the --endf-dir directory name)")
     args = parser.parse_args()
 
-    import nuclear_data_to_arrow as converter
-
     if shutil.which(args.njoy) is None and not pathlib.Path(args.njoy).is_file():
         raise SystemExit(
             f"NJOY not found ({args.njoy!r}). The njoy2016 wheel in requirements.txt "
@@ -463,9 +438,9 @@ def main():
         print(f"{name}: NJOY at {args.temperature:g} K "
               f"({abundance:.4g}% of natural {name.rstrip('0123456789')}) ...", flush=True)
         start = time.perf_counter()
-        converter.convert_neutron(
-            sources[name],
-            out_dir,
+        yats.convert_neutron_xs(
+            input_path=str(sources[name]),
+            output_dir=str(out_dir),
             source_format="endf",
             temperatures=[args.temperature],
             library=args.library,
@@ -481,7 +456,7 @@ def main():
         if args.no_branching:
             print("\nBRANCH: skipped, so isomer-dominated foils (Nb, Ag, W) will be wrong")
         else:
-            build_branching(sources, decay_dir, args.chain, args.library, work_dir)
+            build_branching(sources, decay_dir, args.chain, args.library)
         if args.no_reactions:
             print("REACT: skipped, so the network topology stays on " + DECAY_LIBRARY)
         else:

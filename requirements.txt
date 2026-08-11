@@ -1,16 +1,23 @@
-# njoy2016 is not on PyPI. The wheel puts an `njoy` binary in the venv's bin/,
-# which is what the ENDF conversion shells out to.
+# NJOY reconstructs the resonances and Doppler broadens, which no library and
+# no language can avoid, so a binary is still needed. njoy2016 is not on PyPI;
+# this wheel puts an `njoy` in the venv's bin/. Use your own build instead with
+# `--njoy`, which is also how you point at the IAEA-NDS fork that FENDL needs.
 --extra-index-url https://shimwell.github.io/wheels
+njoy2016
 
-# The endf reader. It has to be this fork and this branch: from_njoy, the ACE
-# reader and Chain are not in the `endf` on PyPI, nor on the fork's own main,
-# which tracks upstream.
-git+https://github.com/shimwell/endf-python@local-develop
+# yats reads the nuclear data and now makes it too: the ENDF conversion, the
+# reaction topology and the isomeric branching are all functions on the wheel.
+# Nothing here resolves against a sibling checkout, and there is no `endf`
+# package pinned to a branch of a fork.
+#
+# Installed from git, NOT from PyPI. `pip install yats` there fetches "a fast
+# lightweight Twitter scraper" (yats 1.0.1, 2021, an unrelated project that
+# holds the name), which installs happily and then has no convert_* functions,
+# so the failure arrives later as a baffling AttributeError. See
+# fusion-neutronics/yamc#444.
+yats @ git+https://github.com/fusion-neutronics/yamc.git#subdirectory=packages/yats
 
-# The converter and yats, from the yamc checkout beside this one. These resolve
-# against the directory pip runs in, so run it from this one.
-../yamc-org/yamc/packages/nuclear_data_to_arrow[njoy]
-../yamc-org/yamc/packages/yats
-
+# The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
+# numpy is not listed separately: one line fewer to read, and there is no
+# arrangement of these two where matplotlib is installed and numpy is not.
 matplotlib
-numpy
