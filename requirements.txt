@@ -7,16 +7,14 @@ njoy2016
 
 # yani reads the nuclear data and now makes it too: the ENDF conversion, the
 # reaction topology and the isomeric branching are all functions on the wheel.
-# Nothing here resolves against a sibling checkout, and there is no `endf`
-# package pinned to a branch of a fork.
+# Nothing here resolves against a sibling checkout, there is no `endf` package
+# pinned to a branch of a fork, and nothing is installed from git.
 #
-# The package used to be called yats, which is unusable as a PyPI name: it
-# belongs to an unrelated Twitter scraper that installs happily and then has no
-# convert_* functions, so the failure arrived as a baffling AttributeError.
-# `yani` is free, and this line becomes a plain `yani` once the first wheel is
-# published under it. Until then it installs from git.
-# See fusion-neutronics/core#444.
-yani @ git+https://github.com/fusion-neutronics/core.git#subdirectory=packages/yani
+# `yani` is a small distribution that pins the compiled `yani-core` wheel and
+# pulls it in; the module you import is `yani` either way (as `pillow` provides
+# `PIL`). Wheels are published for Linux x86_64, Windows x64 and macOS arm64,
+# abi3 from Python 3.10 up, so there is nothing to build.
+yani
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no

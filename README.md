@@ -31,16 +31,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-That is the whole install, and it no longer needs a checkout of anything.
-`yani` both reads the nuclear data and makes it: the ENDF conversion, the
-reaction topology and the isomeric branching are all functions on the wheel.
+That is the whole install: everything comes from PyPI, nothing from git, and
+nothing needs a checkout beside this one. `yani` both reads the nuclear data
+and makes it: the ENDF conversion, the reaction topology and the isomeric
+branching are all functions on the wheel.
 
-It installs from git rather than PyPI because no wheel is published under this
-name yet. The package was called `yats` until recently, and that name is
-unusable on PyPI: it belongs to an unrelated Twitter scraper, so
-`pip install yats` succeeds and gives you a package with none of these
-functions. `yani` is free, so this becomes a plain `pip install` once the first
-wheel is up.
+The wheels are abi3 from Python 3.10 up, one per platform rather than one per
+Python version, published for Linux x86_64, Windows x64 and macOS arm64. There
+is no Rust toolchain to install and nothing is compiled here.
 
 NJOY is the one external tool left, and no library in any language avoids it:
 an ENDF evaluation describes the resonance region with parameters rather than
