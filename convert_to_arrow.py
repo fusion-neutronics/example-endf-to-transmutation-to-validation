@@ -4,7 +4,7 @@
 Reads the foil's composition from the benchmark's own input deck, expands it
 into natural isotopes, and puts each of those ENDF evaluations through NJOY
 (resonance reconstruction plus Doppler broadening to 294 K). Each comes out as
-a ``Fe56.arrow/`` directory of Arrow record batches, which is the form yats
+a ``Fe56.arrow/`` directory of Arrow record batches, which is the form yani
 reads.
 
     convert_to_arrow.py                                  # iron, the default
@@ -57,7 +57,7 @@ import urllib.request
 
 import data_source
 import fns_case
-import yats
+import yani
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -84,15 +84,15 @@ _ZSYMAM_RE = re.compile(r"\s*(\d+)\s*-\s*([A-Za-z]{1,2})\s*-\s*(\d+)")
 def isotopes_for(elements):
     """The natural isotopes of each element, as {nuclide: abundance percent}.
 
-    Taken from yats rather than a table kept here, so the isotopes converted
-    are exactly the ones yats will expand the material into.
+    Taken from yani rather than a table kept here, so the isotopes converted
+    are exactly the ones yani will expand the material into.
     """
-    by_element = yats.data.element_nuclides()
-    abundance = yats.data.natural_abundance()
+    by_element = yani.data.element_nuclides()
+    abundance = yani.data.natural_abundance()
     wanted = {}
     for element in elements:
         if element not in by_element:
-            raise SystemExit(f"{element} has no natural isotopes in yats' abundance table")
+            raise SystemExit(f"{element} has no natural isotopes in yani's abundance table")
         for nuclide in by_element[element]:
             wanted[nuclide] = abundance.get(nuclide, 0.0) * 100.0
     return wanted
@@ -286,7 +286,7 @@ def build_branching(sources, decay_dir, out_root, library):
     not the whole chain.
     """
     print(f"BRANCH: isomeric branching for {len(sources)} parents")
-    stats = yats.convert_branching(
+    stats = yani.convert_branching(
         neutron_files=[str(path.resolve()) for _, path in sorted(sources.items())],
         decay_files=[str(p) for p in sorted(decay_dir.glob(DECAY_GLOB))],
         output_path=str(out_root),
@@ -317,7 +317,7 @@ def build_reactions(sources, decay_dir, out_root, library):
     parents that matter are the ones the foil started as.
     """
     print(f"REACT: reaction topology for {len(sources)} parents")
-    yats.convert_transmutation(
+    yani.convert_transmutation(
         decay_files=[str(p) for p in sorted(decay_dir.glob(DECAY_GLOB))],
         fpy_files=[],
         neutron_files=[str(path.resolve()) for _, path in sorted(sources.items())],
@@ -438,7 +438,7 @@ def main():
         print(f"{name}: NJOY at {args.temperature:g} K "
               f"({abundance:.4g}% of natural {name.rstrip('0123456789')}) ...", flush=True)
         start = time.perf_counter()
-        yats.convert_neutron_xs(
+        yani.convert_neutron_xs(
             input_path=str(sources[name]),
             output_dir=str(out_dir),
             source_format="endf",

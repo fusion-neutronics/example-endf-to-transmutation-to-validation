@@ -5,17 +5,18 @@
 --extra-index-url https://shimwell.github.io/wheels
 njoy2016
 
-# yats reads the nuclear data and now makes it too: the ENDF conversion, the
+# yani reads the nuclear data and now makes it too: the ENDF conversion, the
 # reaction topology and the isomeric branching are all functions on the wheel.
 # Nothing here resolves against a sibling checkout, and there is no `endf`
 # package pinned to a branch of a fork.
 #
-# Installed from git, NOT from PyPI. `pip install yats` there fetches "a fast
-# lightweight Twitter scraper" (yats 1.0.1, 2021, an unrelated project that
-# holds the name), which installs happily and then has no convert_* functions,
-# so the failure arrives later as a baffling AttributeError. See
-# fusion-neutronics/yamc#444.
-yats @ git+https://github.com/fusion-neutronics/yamc.git#subdirectory=packages/yats
+# The package used to be called yats, which is unusable as a PyPI name: it
+# belongs to an unrelated Twitter scraper that installs happily and then has no
+# convert_* functions, so the failure arrived as a baffling AttributeError.
+# `yani` is free, and this line becomes a plain `yani` once the first wheel is
+# published under it. Until then it installs from git.
+# See fusion-neutronics/core#444.
+yani @ git+https://github.com/fusion-neutronics/core.git#subdirectory=packages/yani
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no
