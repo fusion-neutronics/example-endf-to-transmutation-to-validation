@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 2: irradiate one FNS foil with yats and plot against the measurement.
+"""Step 2: irradiate one FNS foil with yani and plot against the measurement.
 
 The FNS decay-heat experiments (JAEA Fusion Neutronics Source, IAEA CoNDERC)
 hold a 1 g foil in a 14 MeV field, pull it out, and measure how much heat it
@@ -14,9 +14,9 @@ Everything about the case (composition, density, flux, spectrum, schedule and
 the measurement) comes from `fns_data.json`. Cross sections come from the Arrow
 directory convert_to_arrow.py produced, which has to hold the same foil's
 isotopes, as do the reaction topology and isomeric branching. Decay data comes
-from endf-b8.1, which yats downloads on first use.
+from endf-b8.1, which yani downloads on first use.
 
-There is no transport here: the measured spectrum is the input, and yats
+There is no transport here: the measured spectrum is the input, and yani
 collapses it against the cross sections to get one-group reaction rates, then
 solves the Bateman system over the schedule.
 """
@@ -30,7 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
-import yats  # noqa: E402
+import yani  # noqa: E402
 
 import data_source  # noqa: E402
 import fns_case  # noqa: E402
@@ -55,9 +55,9 @@ def subsections_of(chain):
 
 def run(case, cross_sections, chain):
     """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
-    yats.cross_section_data = str(cross_sections)
-    yats.transmutation_decay_data = DECAY_LIBRARY
-    yats.transmutation_fission_yields = DECAY_LIBRARY
+    yani.cross_section_data = str(cross_sections)
+    yani.transmutation_decay_data = DECAY_LIBRARY
+    yani.transmutation_fission_yields = DECAY_LIBRARY
 
     # Everything a neutron evaluation states is taken from the one the cross
     # sections came from, so that the whole reaction side of the network moves
@@ -73,23 +73,23 @@ def run(case, cross_sections, chain):
          "fewer production channels; rerun without --no-reactions"),
     ]:
         if subsection in have:
-            setattr(yats, setting, str(chain))
+            setattr(yani, setting, str(chain))
             print(f"{subsection}: {chain}")
         else:
-            setattr(yats, setting, DECAY_LIBRARY)
+            setattr(yani, setting, DECAY_LIBRARY)
             print(f"{subsection}: {DECAY_LIBRARY} ({warning})")
 
     # The histogram is a shape; the pulse rate carries the magnitude.
-    spectrum = yats.NeutronSource(
-        energy=yats.sources.Histogram("CCFE-709", case.spectrum.tolist())
+    spectrum = yani.NeutronSource(
+        energy=yani.sources.Histogram("CCFE-709", case.spectrum.tolist())
     )
-    schedule = yats.PulseSchedule(
-        [yats.Pulse(duration=(seconds, "s"), rate=flux, source=spectrum)
+    schedule = yani.PulseSchedule(
+        [yani.Pulse(duration=(seconds, "s"), rate=flux, source=spectrum)
          for seconds, flux in case.irradiation]
-        + [yats.Cooldown(duration=(seconds, "s")) for seconds in case.cooling]
+        + [yani.Cooldown(duration=(seconds, "s")) for seconds in case.cooling]
     )
 
-    material = yats.Material(
+    material = yani.Material(
         composition=case.composition,
         fraction_type="mass",
         density=case.density,
@@ -156,7 +156,7 @@ def plot(case, calculated, breakdown, ratio, metrics, out_dir):
         top.errorbar(times, measured, yerr=uncertainty, fmt="o", color="black",
                      markersize=5, capsize=3, label="FNS measurement", zorder=3),
         top.plot(times, calculated, "-", color="#d62728", linewidth=2,
-                 label="yats", zorder=2)[0],
+                 label="yani", zorder=2)[0],
     ]
 
     # Name the products that carry the heat, so the curve is readable as physics
@@ -197,7 +197,7 @@ def plot(case, calculated, breakdown, ratio, metrics, out_dir):
                         color="black", alpha=0.15, label="measurement uncertainty")
     bottom.plot(times, ratio, "o-", color="#d62728", markersize=4)
     bottom.set_xlabel(f"time after shutdown [{case.time_unit}]")
-    bottom.set_ylabel("yats / measured")
+    bottom.set_ylabel("yani / measured")
     bottom.set_xscale("log")
     bottom.legend()
     bottom.grid(alpha=0.3)
@@ -268,7 +268,7 @@ def main():
     ratio, metrics = summarise(case, calculated)
     plot(case, calculated, breakdown, ratio, metrics, args.output)
 
-    print(f"\n{case.time_unit:>9}  {'measured':>10}  {'yats':>10}  {'C/E':>6}")
+    print(f"\n{case.time_unit:>9}  {'measured':>10}  {'yani':>10}  {'C/E':>6}")
     for time, exp, calc, r in zip(case.times, case.measured, calculated, ratio):
         print(f"{time:9.2f}  {exp:10.3e}  {calc:10.3e}  {r:6.3f}")
     print(f"\nmedian C/E {metrics['median_ratio']:.3f}, "
@@ -283,7 +283,7 @@ def main():
         "times": case.times.tolist(),
         "measured_uW_per_g": case.measured.tolist(),
         "measured_uncertainty": case.uncertainty.tolist(),
-        "yats_uW_per_g": calculated.tolist(),
+        "yani_uW_per_g": calculated.tolist(),
         "ratio": ratio.tolist(),
         **metrics,
         "by_nuclide_uW_per_g": [

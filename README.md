@@ -9,9 +9,9 @@ The whole chain is three steps.
    made of. TENDL-2025 by default, any library you point it at otherwise.
 2. **Arrow out.** NJOY reconstructs the resonances and Doppler broadens to
    294 K, and `nuclear_data_to_arrow` writes the result as Arrow, which is the
-   form yats reads. This happens on your machine; nothing pre-processed is
+   form yani reads. This happens on your machine; nothing pre-processed is
    downloaded.
-3. **Validation.** yats irradiates a 1 g foil with the measured neutron
+3. **Validation.** yani irradiates a 1 g foil with the measured neutron
    spectrum from the JAEA FNS decay-heat experiment, follows the activation
    products through the cooling schedule, and the specific decay heat is
    plotted against the measurement.
@@ -20,8 +20,8 @@ It defaults to iron, and `--case` takes any of the 73 FNS foils.
 
 There is no neutron transport anywhere in this example. The FNS experiment
 published the spectrum the foil actually saw, so that spectrum is the input and
-yats collapses it against the cross sections to get one-group reaction rates.
-That is what yats is for: transmutation and activation given a spectrum.
+yani collapses it against the cross sections to get one-group reaction rates.
+That is what yani is for: transmutation and activation given a spectrum.
 
 ## Install
 
@@ -32,12 +32,15 @@ pip install -r requirements.txt
 ```
 
 That is the whole install, and it no longer needs a checkout of anything.
-`yats` both reads the nuclear data and makes it: the ENDF conversion, the
+`yani` both reads the nuclear data and makes it: the ENDF conversion, the
 reaction topology and the isomeric branching are all functions on the wheel.
 
-It installs from git rather than PyPI, and deliberately: the name `yats` on
-PyPI belongs to an unrelated Twitter scraper, so `pip install yats` succeeds
-and gives you a package with none of these functions.
+It installs from git rather than PyPI because no wheel is published under this
+name yet. The package was called `yats` until recently, and that name is
+unusable on PyPI: it belongs to an unrelated Twitter scraper, so
+`pip install yats` succeeds and gives you a package with none of these
+functions. `yani` is free, so this becomes a plain `pip install` once the first
+wheel is up.
 
 NJOY is the one external tool left, and no library in any language avoids it:
 an ENDF evaluation describes the resonance region with parameters rather than
@@ -162,7 +165,7 @@ result.
 
 ## What comes out
 
-For iron on the default experiment, yats tracks the measurement to 6.0% mean
+For iron on the default experiment, yani tracks the measurement to 6.0% mean
 deviation, starting on top of it and drifting high by the end of the hour, with
 a median C/E of 1.064 against a measurement whose own median sigma is 5.4%. Run
 the same iron against `1996exp_5min` and it comes out low instead, median C/E
@@ -279,7 +282,7 @@ Three things go in, per experiment:
   of a deck is solver settings and output requests, which mean nothing here, so
   no FISPACT input reader is needed.
 
-The cooling steps yats takes are the intervals between measured points rather
+The cooling steps yani takes are the intervals between measured points rather
 than the deck's own steps, which is why the deck's cooling schedule is read at
 build time but not carried into the JSON. The two are meant to agree and nearly
 always do, but a few decks drift from their measurement (`Co/1996exp_5min` stops
@@ -298,7 +301,7 @@ energy each decay releases.
   state it is made in, and the **reaction topology**, which says which reaction
   on which parent gives which product at all. All three come out of the same
   neutron evaluations, so all three move together when you change library.
-* From endf-b8.1, downloaded by yats on first use: the **decay data**, meaning
+* From endf-b8.1, downloaded by yani on first use: the **decay data**, meaning
   half-lives, decay modes and **decay energies**.
 
 The split is not arbitrary, and it is drawn where the data runs out rather than

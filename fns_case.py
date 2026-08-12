@@ -53,7 +53,7 @@ class Case:
         self.measured = np.array(entry["measured_uW_per_g"])
         self.uncertainty = np.array(entry["uncertainty_uW_per_g"])
 
-        # The deck's own cooling steps are not carried: yats cools in the
+        # The deck's own cooling steps are not carried: yani cools in the
         # intervals between measured points instead, so the comparison is exact
         # at every point. A few decks drift from their own measurement
         # (Co/1996exp_5min stops at 54.7 minutes against a last point at 57.0).
