@@ -53,6 +53,17 @@ def subsections_of(chain):
     return set(json.loads((chain / "manifest.json").read_text()).get("subsections", {}))
 
 
+def scope_of(chain):
+    """Which parents the chain covers, from the sidecar convert_to_arrow.py wrote.
+
+    None where the chain predates the sidecar, which is not the same as a chain
+    covering nothing: those fall through to the zero-heat check after the solve.
+    """
+    if chain is None or not (chain / "scope.json").is_file():
+        return None
+    return set(json.loads((chain / "scope.json").read_text()).get("parents", []))
+
+
 def run(case, cross_sections, chain):
     """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
     yani.cross_section_data = str(cross_sections)
@@ -99,6 +110,23 @@ def run(case, cross_sections, chain):
     )
     nuclides = sorted(material.get_nuclide_names())
     print(f"material: {len(nuclides)} nuclides, {' '.join(nuclides)}")
+
+    # The chain is rebuilt per foil and scoped to that foil's isotopes, so one
+    # left over from a different foil carries no reactions for these nuclides
+    # and solves to an inventory of nothing. That surfaced only as zero decay
+    # heat at the end of a full run, which names neither the foil the chain was
+    # built for nor the nuclides it is missing. Refuse it up front instead.
+    covered = scope_of(chain)
+    missing = sorted(set(nuclides) - covered) if covered is not None else []
+    if missing:
+        raise SystemExit(
+            f"{case.name}: the chain at {chain} was built for "
+            f"{' '.join(sorted(covered)) or 'nothing'}, so it has no reactions for "
+            f"{' '.join(missing)}.\n"
+            f"Rebuild it for this foil and try again:\n"
+            f"  python convert_to_arrow.py --case {case.name} "
+            f"--output {cross_sections} --chain {chain}"
+        )
 
     states = material.transmute(schedule)
 

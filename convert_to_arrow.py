@@ -44,6 +44,7 @@ comes from an isomer, and ``--no-reactions`` leaves the topology on endf-b8.1.
 
 import argparse
 import fnmatch
+import json
 import os
 import pathlib
 import re
@@ -329,6 +330,26 @@ def build_reactions(sources, decay_dir, out_root, library):
     return out_root
 
 
+def write_scope(out_root, sources, library):
+    """Record which parents the chain covers, beside the data yani wrote.
+
+    Both subsections are scoped to the foil's own isotopes. That is sound for
+    these experiments, since the products barely burn: the longest of them is
+    7.6 hours at 1e10 n/cm2/s, a fluence of 2.9e14 n/cm2, so a product with a
+    1 barn cross section is consumed at the 1e-10 level and second-order
+    production sits far below the channels that carry the heat.
+
+    What it does leave is a chain that is silently specific to one foil, and
+    running a different foil against it solves to an inventory of nothing.
+    yani's own manifest does not carry the parent list, so it goes in a sidecar
+    this repo owns and run_transmutation.py checks before it solves anything.
+    """
+    out_root.mkdir(parents=True, exist_ok=True)
+    (out_root / "scope.json").write_text(
+        json.dumps({"library": library, "parents": sorted(sources)}, indent=2) + "\n"
+    )
+
+
 def _extract(tar, members, dest):
     """Write just `members` out of an open tar, streaming-safe (no seeking)."""
     remaining = set(members)
@@ -461,6 +482,7 @@ def main():
             print("REACT: skipped, so the network topology stays on " + DECAY_LIBRARY)
         else:
             build_reactions(sources, decay_dir, args.chain, args.library)
+        write_scope(args.chain, sources, args.library)
 
     print(f"\nArrow cross sections in {out_dir}")
     print(f"Next: python run_transmutation.py --case {args.case}"
