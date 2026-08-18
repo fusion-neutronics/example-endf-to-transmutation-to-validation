@@ -25,10 +25,21 @@ That is what yani is for: transmutation and activation given a spectrum.
 
 ## Install
 
+# Clone the repo
+```bash
+git clone https://github.com/fusion-neutronics/example-endf-to-transmutation-to-validation.git
+cd example-endf-to-transmutation-to-validation
+```
+
+# Create an isolated Python environment
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+```
+
+# Install the dependencies needed by the example
+```bash
+python -m pip install -r requirements.txt
 ```
 
 That is the whole install: everything comes from PyPI, nothing from git, and
