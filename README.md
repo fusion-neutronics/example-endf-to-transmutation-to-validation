@@ -189,6 +189,41 @@ difference smaller than that foil's measurement sigma is called a tie, because
 most of these foils agree within it and a difference below sigma is not a
 result.
 
+### A report PDF
+
+```bash
+python make_report.py --case W --libraries tendl-2025 tendl-2017 \
+    --chain data/tendl-2025/chain
+```
+
+Binds the per-foil JSON into `results/report_<case>_<experiment>.pdf`, one page
+each for the foil, the C/E table with an E/C column per library, the products
+carrying the heat, their production pathways, and the heat curves with their
+percentage contributions. Nothing is recomputed: step 2 already wrote the full
+per-nuclide breakdown, so a report is cheap to regenerate and cannot disagree
+with the run it came from.
+
+The table's two figures of merit are the published ones, the mean of
+`|C/E - 1|` and a mean chi-squared against the measurement's own sigma, which is
+what says whether a deviation is larger than the experiment can resolve. On
+W/2000exp_5min against TENDL-2025 they come out at 122.0% and 105.14, against
+122 and 105.24 in the UKAEA decay heat validation report.
+
+`--chain` is optional and only the pathway page depends on it, but prefer the
+library's own chain over a generic one: the isomeric branching that step 1
+writes to `branching/` is what puts `W186(n,2n)W185m` on the page, and on a
+tungsten foil that one path is 98% of the decay heat. Pathways are walked from
+the foil's own isotopes rather than across the whole chain, two reaction steps
+by default, because these irradiations are 5 minutes to 7 hours and nothing
+beyond second order registers in that time.
+
+Three columns the published reports carry are left out rather than estimated: an
+uncertainty on the calculated value, which needs cross-section covariance
+propagated through the inventory; "Path %", which needs per-reaction rates where
+the saved results keep only the inventory those rates produced; and decay feeds
+past one reaction step, since the chain carries half-lives and topology but not
+decay modes.
+
 ## What comes out
 
 For iron on the default experiment, yani tracks the measurement to 6.0% mean
