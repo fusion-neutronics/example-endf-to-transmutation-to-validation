@@ -46,6 +46,28 @@ TEMPERATURE = 294.0
 DECAY_LIBRARY = "endf-b8.1"
 
 
+def available_cross_section_sources(data_root):
+    """Source names that already have a converted neutron Arrow directory."""
+    if not data_root.is_dir():
+        return []
+    return sorted(path.parent.name for path in data_root.glob("*/neutron") if path.is_dir())
+
+
+def inferred_chain_path(cross_sections):
+    """The matching chain directory for a standard neutron path, or None.
+
+    convert_to_arrow.py writes cross sections to data/<source>/neutron and the
+    chain subsections to data/<source>/chain. If run_transmutation.py is pointed
+    at that neutron directory, prefer the sibling chain by default so both come
+    from the same conversion run.
+    """
+    if cross_sections is None:
+        return None
+    if pathlib.Path(cross_sections).name == "neutron":
+        return pathlib.Path(cross_sections).parent / "chain"
+    return None
+
+
 def subsections_of(chain):
     """Which chain subsections convert_to_arrow.py wrote, from the manifest."""
     if chain is None or not (chain / "manifest.json").is_file():
@@ -258,7 +280,8 @@ def main():
                              "(default: data/<source>/neutron)")
     parser.add_argument("--chain", type=pathlib.Path, default=None,
                         help="branching subsection from convert_to_arrow.py "
-                             "(default: data/<source>/chain)")
+                            "(default: data/<source>/chain, or the sibling of "
+                            "--cross-sections when it ends with /neutron)")
     parser.add_argument("--output", type=pathlib.Path, default=None,
                         help="where the results go (default: results/<source>)")
     parser.add_argument("--list", action="store_true",
@@ -274,7 +297,9 @@ def main():
     if args.cross_sections is None:
         args.cross_sections = HERE / "data" / source / "neutron"
     if args.chain is None:
-        args.chain = HERE / "data" / source / "chain"
+        args.chain = inferred_chain_path(args.cross_sections)
+        if args.chain is None:
+            args.chain = HERE / "data" / source / "chain"
     if args.output is None:
         args.output = HERE / "results" / source
 
@@ -284,9 +309,37 @@ def main():
         return
 
     if not args.cross_sections.is_dir():
-        raise SystemExit(
-            f"no cross sections at {args.cross_sections}. Run convert_to_arrow.py first."
-        )
+        data_root = HERE / "data"
+        available = available_cross_section_sources(data_root)
+        message = [
+            f"no cross sections at {args.cross_sections}.",
+            "Run convert_to_arrow.py first, or point this run at an existing source.",
+        ]
+        if available:
+            message.append(
+                "Known converted sources under data/: " + ", ".join(available)
+            )
+            if source not in available:
+                pick = available[0] if len(available) == 1 else None
+                if pick is not None:
+                    message.extend([
+                        "Your source defaults to the library name unless --source is set.",
+                        "This often differs after --endf-dir, where the directory basename "
+                        "becomes the source name.",
+                        "Try one of:",
+                        f"  python run_transmutation.py --case {args.case} --source {pick}",
+                        f"  python run_transmutation.py --case {args.case} "
+                        f"--cross-sections data/{pick}/neutron",
+                    ])
+                else:
+                    message.extend([
+                        "Your source defaults to the library name unless --source is set.",
+                        "This often differs after --endf-dir, where the directory basename "
+                        "becomes the source name.",
+                        "Use one of the listed source names with --source, for example:",
+                        f"  python run_transmutation.py --case {args.case} --source <one-of-above>",
+                    ])
+        raise SystemExit("\n".join(message))
 
     case = fns_case.load(args.case, args.experiment, args.fns_data)
     print(f"case: {case.describe()}")

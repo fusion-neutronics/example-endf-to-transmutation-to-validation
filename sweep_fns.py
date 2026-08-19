@@ -14,8 +14,8 @@ isotopes one foil needs, which is a reasonable trade once and a terrible one
 73 times.
 
 Both scripts are called as they would be by hand, so a foil that fails is
-reported and the sweep carries on. Conversion is cached, so a second run only
-redoes the foils that failed the first time.
+reported and the sweep carries on. Conversion runs each time, so a second run
+rebuilds every foil from the same command line.
 
 The table is sorted by mean deviation, worst last, because the point of running
 all of them is to find where the library falls over. Read it alongside

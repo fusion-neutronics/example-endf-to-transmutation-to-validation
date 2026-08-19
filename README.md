@@ -136,11 +136,28 @@ you nothing: evaluations are matched on their filename wherever they sit.
 
 The last form transfers around 3 GB whatever you asked for, because TENDL
 publishes its neutron sublibrary as a single archive; only the wanted members
-are written to disk. Conversion runs about twenty seconds per isotope and the
-results are cached, so the second run of the script does nothing.
+are written to disk. Conversion runs about twenty seconds per isotope, and each
+run reconverts the isotopes for the selected foil.
 
 `run_transmutation.py` writes `results/<source>/fns_<case>_<experiment>.png` and
 a JSON of the same numbers, including the per-nuclide breakdown of the heat.
+
+When step 1 uses `--endf-dir`, the `<source>` name defaults to that directory's
+basename. For example, this pair matches:
+
+```bash
+python convert_to_arrow.py --case W --endf-dir libs --library tendl-2025
+python run_transmutation.py --case W --source libs
+```
+
+or, equivalently:
+
+```bash
+python run_transmutation.py --case W --cross-sections data/libs/neutron
+```
+
+When `--cross-sections` ends with `/neutron`, `run_transmutation.py` defaults
+`--chain` to the sibling `/chain` directory.
 
 ### One folder per library
 

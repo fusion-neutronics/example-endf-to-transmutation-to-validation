@@ -401,7 +401,6 @@ def main():
                         help="skip the isomeric branching subsection")
     parser.add_argument("--no-reactions", action="store_true",
                         help="skip the reaction topology subsection")
-    parser.add_argument("--force", action="store_true", help="reconvert files that already exist")
     parser.add_argument("--source", default=None,
                         help="folder name to file this run's data and results under "
                              "(default: the library name, or the --endf-dir directory name)")
@@ -453,9 +452,6 @@ def main():
 
     for name, abundance in wanted.items():
         target = out_dir / f"{name}.arrow"
-        if target.is_dir() and not args.force:
-            print(f"{name}: already converted ({abundance:.4g}% of natural {name.rstrip('0123456789')})")
-            continue
         print(f"{name}: NJOY at {args.temperature:g} K "
               f"({abundance:.4g}% of natural {name.rstrip('0123456789')}) ...", flush=True)
         start = time.perf_counter()
@@ -485,8 +481,13 @@ def main():
         write_scope(args.chain, sources, args.library)
 
     print(f"\nArrow cross sections in {out_dir}")
-    print(f"Next: python run_transmutation.py --case {args.case}"
-          + (f" --experiment {args.experiment}" if args.experiment else ""))
+    follow_up = ["python", "run_transmutation.py", "--case", args.case]
+    if args.experiment:
+        follow_up += ["--experiment", args.experiment]
+    default_source = data_source.slug(args.library, None, None)
+    if source != default_source:
+        follow_up += ["--source", source]
+    print("Next: " + " ".join(follow_up))
 
 
 if __name__ == "__main__":
