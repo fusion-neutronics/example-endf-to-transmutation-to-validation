@@ -215,6 +215,15 @@ def plot(case, calculated, breakdown, ratio, metrics, out_dir):
     for contributions in breakdown:
         for nuclide, watts in contributions.items():
             totals[nuclide] = totals.get(nuclide, 0.0) + watts
+    # Only the leading few are drawn, to keep the legend readable. The rest are
+    # not lost: every nuclide the network produced is written to the JSON under
+    # by_nuclide_uW_per_g, one entry per cooling step, so anything dropped here
+    # can still be plotted or ranked from the saved result.
+    #
+    # The ranking is by heat summed over the cooling steps, which favours
+    # whatever dominates the early high-heat points. A product that peaks late
+    # can carry a visible share of the curve and still fall outside the cut, so
+    # this legend is not the list of everything that matters.
     leaders = sorted(totals, key=totals.get, reverse=True)[:3]
     for nuclide in leaders:
         series = [c.get(nuclide, 0.0) / case.mass_g * 1e6 for c in breakdown]
