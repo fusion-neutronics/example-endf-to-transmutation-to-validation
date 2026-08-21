@@ -10,29 +10,42 @@ UKAEA decay-heat validation reports use:
     cover page               the foil, named
     C/E table                one row per cooling point, one E/C column per library
     dominant products        what carries the heat, with half-lives
-    production pathways      which reaction on which parent makes each product
+    production pathways      the reaction and decay steps that make each product
     figure page              heat curves and % contributions, one row per library
 
 Nothing is recomputed: the inventory solve happened in step 2 and its full
 per-nuclide breakdown is in the JSON, so a report is cheap to regenerate and
 cannot disagree with the run it came from.
 
-Three columns the published reports carry are NOT reproduced here, because the
-saved results do not contain what they need. They are left out rather than
-filled with a plausible number:
+Two columns the published reports carry are NOT reproduced here, because the
+data needed for them is not reachable. They are left out rather than filled with
+a plausible number:
 
 * An uncertainty on the calculated value (the reports print "+/- 6%"). That is
-  cross-section covariance propagated through the inventory, which yani does
-  not currently produce, so the calculated column here is a bare value.
-* "Path %", the fraction of a product's inventory that arrives down each
-  pathway. That needs per-reaction rates, sigma(g) folded with the group flux
-  for every edge, and the results JSON keeps only the inventory the rates
-  produced. The pathways themselves are real, taken from the library's own
-  topology; only their relative weights are missing.
-* Decay feeds beyond one neutron reaction. The chain exposes half-lives and the
-  reaction topology but not decay modes, so ``W186(n,2n)W185m`` is derivable and
-  the ``(IT)W185`` step that follows it is not. Isomers are marked as feeding
-  their ground state, which is the one decay edge a name settles on its own.
+  cross-section covariance propagated through the inventory, which yani does not
+  currently produce, so the calculated column here is a bare value.
+* "Path %", the fraction of a product's inventory arriving down each route. The
+  solve computes the rate of every edge in order to build its burnup matrix, but
+  ``Material.transmute`` hands back the materials and not the rates, so the
+  weights cannot be recovered from the result. The routes themselves are real,
+  and the page says outright that their order is not a ranking.
+
+  The one number that would settle which evaluated quantity a disagreement
+  belongs to is the flux-weighted isomeric branching, and it is the clearest
+  casualty. It cannot be read off the chain either: the chain file's own
+  branching for the dominant tungsten channel is a placeholder,
+
+      W186 (n,2n) -> W185      branching 1.000000
+      W186 (n,2n) -> W185_m1   branching 0.000000
+
+  which the energy-dependent overlay in ``branching/`` replaces at solve time.
+  It is not zero in any meaningful sense: with the overlay configured W185m
+  carries 98% of the decay heat at the first cooling point, and without it 10%.
+
+Decay feeds used to be a third omission and no longer are. ``TransmutationChain``
+gained ``decays`` in yani 0.8, so a route can be followed past its neutron
+reaction and ``W186(n,2n)W185m(IT)W185`` is derivable rather than guessed at.
+That is why this script needs yani 0.8 or newer.
 """
 
 from __future__ import annotations
@@ -71,6 +84,18 @@ MONO = {"family": "monospace", "fontsize": 7.4}
 # it buries any product that peaks late: on W/2000exp_5min it puts Ta184 tenth
 # despite Ta184 carrying 18% of the heat at one point.
 SHARE_FLOOR = 0.002
+
+# How many decay steps a route may follow after its neutron reaction, and the
+# branching below which a decay branch is not worth a line. Three steps covers
+# what these irradiations reach: the longest route the published pages carry is
+# W182(n,p)Ta182n(IT)Ta182m(IT)Ta182, which is three.
+DECAY_STEPS = 3
+DECAY_FLOOR = 0.01
+
+# Routes shown per product. Products reached by many small channels can carry
+# dozens once decay steps are included, and a page of them buries the one that
+# matters. Whatever this drops is counted and said on the page.
+ROUTES_SHOWN = 6
 
 # The cover page names the foil. Element symbols only; the benchmark's four
 # alloy foils (Inc600, NiCr, SS304, SS316) are already their own names.
@@ -165,10 +190,15 @@ def read_chain(chain, decay=DECAY_LIBRARY, cache=CACHE):
         return None, None
 
 
-def topology_source(chain, seeds, depth, case):
-    """Reaction topology as target -> [(parent, reaction)], scoped to the foil.
+def route_source(chain, seeds, depth, case, decay_floor=DECAY_FLOOR,
+                 decay_steps=DECAY_STEPS):
+    """Production routes per product, as whole strings like the reports print them.
 
-    Two scopes are applied, and both matter.
+    ``W186(n,2n)W185_m1(IT)W185``: one neutron reaction off an isotope of the
+    foil, then the decay steps that carry the product on. Both halves come from
+    the chain, :attr:`reactions` for the first and :attr:`decays` for the rest.
+
+    Two scopes are applied to the reaction half, and both matter.
 
     The chain covers every nuclide the library knows, so asking it what makes
     W187 answers with Os190(n,a) and Ir192(n,npa) as readily as W186(n,gamma).
@@ -180,13 +210,24 @@ def topology_source(chain, seeds, depth, case):
     the FNS foils never see: these irradiations are 5 minutes to 7 hours, where
     the inventory is first and second order in the reaction rate and nothing
     else registers. ``depth`` is the cap that keeps the page to that, and it
-    counts reaction steps, so decay does not spend it.
+    counts reaction steps only. Decay does not spend it, because a decay is not
+    a fluence-dependent step: Hf183 becomes Ta183 on its own schedule whether
+    the beam is on or not.
+
+    Decay is capped separately by ``decay_steps``, and branches below
+    ``decay_floor`` are dropped. Cycles are refused outright, which is not
+    hypothetical: Ta186 beta-decays to W186, an isotope of the foil, so an
+    unguarded walk goes round for as long as it is allowed to.
     """
     if chain is None:
-        return {}, ("No chain was given, so the topology is unavailable. Pass "
+        return {}, ("No chain was given, so the routes are unavailable. Pass "
                     "--chain the\ndirectory convert_to_arrow.py wrote for this "
                     "foil to fill this page.")
     forward = chain.reactions
+    # New in yani 0.8: without it a walk stops at the first product, and the
+    # decay steps that carry it on are exactly what a pathway analysis is made
+    # of. See the module docstring.
+    decays = chain.decays
 
     # A chain is scoped to the foil it was converted for, so one built for a
     # different foil loads perfectly and carries no reaction for anything in
@@ -201,43 +242,59 @@ def topology_source(chain, seeds, depth, case):
                     "  python convert_to_arrow.py --case " + case +
                     " --chain <chain>")
 
-    # Breadth first from the foil's isotopes, so a nuclide's depth is the fewest
-    # reaction steps that reach it, and an edge is kept only if its parent sits
-    # inside the cap.
-    reached = {seed: 0 for seed in covered}
-    frontier = list(reached)
-    for step in range(1, depth + 1):
+    routes = {}
+
+    def record(product, text, origin, steps):
+        routes.setdefault(product, {})[text] = (origin, steps)
+
+    def follow_decays(node, text, origin, steps, visited, budget):
+        """Extend one route along the decay chain, depth first."""
+        for mode, daughter, branching in decays.get(node, []):
+            if not daughter or daughter in visited or branching < decay_floor:
+                continue
+            extended = f"{text}({mode}){daughter}"
+            record(daughter, extended, origin, steps + 1)
+            if budget > 1:
+                follow_decays(daughter, extended, origin, steps + 1,
+                              visited | {daughter}, budget - 1)
+
+    # Breadth first over the reaction steps, carrying the route text so a
+    # second reaction extends the first rather than replacing it.
+    frontier = [(seed, seed, seed, {seed}) for seed in covered]
+    for _ in range(depth):
         following = []
-        for parent in frontier:
-            for _reaction, target, _ratio in forward.get(parent, []):
-                if target and target not in reached:
-                    reached[target] = step
-                    following.append(target)
+        for node, text, origin, visited in frontier:
+            for reaction, target, _ratio in forward.get(node, []):
+                if not target or target in visited:
+                    continue
+                extended = f"{text}{reaction}{target}"
+                steps = extended.count("(")
+                record(target, extended, origin, steps)
+                follow_decays(target, extended, origin, steps,
+                              visited | {target}, decay_steps)
+                following.append((target, extended, origin, visited | {target}))
         frontier = following
-
-    backward = {}
-    for parent, level in reached.items():
-        if level >= depth:
-            continue
-        for reaction, target, _ratio in forward.get(parent, []):
-            if target:
-                backward.setdefault(target, []).append((parent, reaction))
-    return backward, None
+    return routes, None
 
 
-def edge_order(abundances):
-    """Sort key putting a product's parents in descending natural abundance.
+def route_order(item):
+    """Sort key for the routes into one product: fewest steps first, then by name.
 
-    Not a contribution ranking, which would need the reaction rates, but not
-    arbitrary either: a route off a parent that is 28% of the foil is a better
-    first line than one off a parent that is 0.12%, and W180 being 0.12% of
-    natural tungsten is exactly why W179 is a smaller product than W185.
+    Deliberately not weighted by anything. An earlier version ordered by the
+    natural abundance of the isotope a route starts from, on the grounds that a
+    route off 28% of the foil beats one off 0.12%. It put
+    ``W184(n,gamma)W185_m1`` above ``W186(n,2n)W185_m1`` for tungsten, because
+    W184 is 30.6% against W186's 28.4%, and that is backwards: in a 14 MeV
+    spectrum capture is negligible against (n,2n), and W185m is 98% of the decay
+    heat, so the one row a reader looks at first was the one the heuristic got
+    wrong.
+
+    A heuristic that fails hardest where it matters most is worse than no
+    heuristic, so the order now carries no claim at all beyond short routes
+    before long ones, and the page says so.
     """
-    def key(edge):
-        parent, reaction = edge
-        return -abundances.get(parent, 0.0), parent, reaction
-
-    return key
+    text, (_origin, steps) = item
+    return steps, text
 
 
 def format_half_life(seconds):
@@ -454,51 +511,48 @@ def table_page(pdf, case, results, half_lives, title, subtitle, number, total):
     plt.close(figure)
 
 
-def pathway_page(pdf, case, results, topology, note, half_lives, depth, abundances,
+def pathway_page(pdf, case, results, routes, note, half_lives, depth,
                  title, subtitle, number, total):
-    """Which reaction on which parent makes each product that carries heat."""
+    """How each product that carries heat is made, reaction and decay steps both."""
     figure = page(pdf, title, subtitle, number, total)
     primary_name, primary = results[0]
     figure.text(0.08, 0.905,
                 f"{element_name(case)}, {primary_name} production pathways",
                 fontsize=11)
-    seen = {nuclide for nuclide, _share, _at in leading_products(primary)}
 
-    if not topology:
-        figure.text(0.08, 0.86, note or "No topology was available.",
+    if not routes:
+        figure.text(0.08, 0.86, note or "No routes were available.",
                     va="top", fontsize=8.6, family="monospace")
         pdf.savefig(figure)
         plt.close(figure)
         return
 
-    rows = [f"{'Product':<10}{'T1/2':>10}  {'Pathway':<38}{'peak share':>12}",
-            "-" * 72]
+    rows = [f"{'Product':<10}{'T1/2':>10}  {'Pathway':<44}{'peak share':>10}",
+            "-" * 74]
+    dropped = 0
     for nuclide, share, _index in leading_products(primary):
-        feeds = [f"{parent}{reaction}{nuclide}"
-                 for parent, reaction in sorted(topology.get(nuclide, []),
-                                                key=edge_order(abundances))]
-        # An isomer feeding its own ground state is the one decay edge a name
-        # settles without a decay mode, and it is worth showing because it is
-        # often the larger half of how the ground state is made: the report has
-        # W186(n,2n)W185m(IT)W185 carrying more of W185 than the direct
-        # W186(n,2n)W185 does. It belongs to the ground state, not to the
-        # isomer, so it is added here rather than under the isomer's own row.
-        for isomer in (f"{nuclide}_m1", f"{nuclide}_m2"):
-            if isomer in topology or isomer in seen:
-                feeds.append(f"{isomer}(IT){nuclide}")
-        if not feeds:
-            feeds = ["no pathway within the depth searched"]
+        found = sorted(routes.get(nuclide, {}).items(), key=route_order)
+        shown = [text for text, _meta in found[:ROUTES_SHOWN]]
+        dropped += max(0, len(found) - ROUTES_SHOWN)
+        if not shown:
+            shown = ["no route within the depth searched"]
         rows.append(f"{nuclide:<10}{format_half_life(half_lives.get(nuclide)):>10}  "
-                    f"{feeds[0]:<38}{share * 100:11.1f}%")
-        rows.extend(f"{'':<22}{feed:<38}" for feed in feeds[1:])
+                    f"{shown[0]:<44}{share * 100:9.1f}%")
+        rows.extend(f"{'':<22}{text:<44}" for text in shown[1:])
     bottom = block(figure, rows, 0.878)
+
+    # A cap that is not said out loud reads as "these are all of them".
+    truncated = (f"\n{dropped} further route{'s' if dropped != 1 else ''} not shown, "
+                 f"at most {ROUTES_SHOWN} per product." if dropped else "")
     figure.text(0.08, bottom - 0.020,
-                f"Pathways are the library's own topology, walked {depth} reaction "
-                f"step{'s' if depth != 1 else ''} from the foil's\n"
-                "own isotopes, in descending parent abundance. That is not a ranking:\n"
-                "the relative weights (the reports' \"Path %\") need per-reaction rates,\n"
-                "and the saved inventory carries only what those rates produced.\n"
-                "\"peak share\" is the product's own largest share of the total heat.",
+                "Routes are the library's own topology and decay data, walked "
+                f"{depth} reaction step{'s' if depth != 1 else ''}\n"
+                "from the foil's own isotopes and then along the decay chain. They are\n"
+                "ordered fewest steps first and then by name, which is not a\n"
+                "ranking of any kind: the relative weights (the reports' \"Path %\") need\n"
+                "the per-edge reaction rates, which the solve computes and does not\n"
+                "hand back. \"peak share\" is the product's own largest share of the\n"
+                f"total decay heat, not a split between its routes.{truncated}",
                 va="top", fontsize=7.6, color="#555555")
     pdf.savefig(figure)
     plt.close(figure)
@@ -573,16 +627,15 @@ def figure_page(pdf, case, results, title, subtitle, number, total):
 def build(case, experiment, libraries, results_root, chain, decay, depth, out,
           title, subtitle):
     """Write the report and return where it went."""
-    import yani.data
-
     results = load_results(case, experiment, libraries, results_root)
     loaded, composed = read_chain(chain, decay)
     half_lives = dict(loaded.half_lives) if loaded else {}
-    topology, note = topology_source(loaded, foil_isotopes(case, experiment), depth,
-                                     case)
+    routes, note = route_source(loaded, foil_isotopes(case, experiment), depth, case)
     if note:
         print(f"pathways: {note.splitlines()[0]}")
-    abundances = yani.data.natural_abundance()
+    else:
+        print(f"pathways: {sum(len(v) for v in routes.values())} routes into "
+              f"{len(routes)} products")
 
     # Four pages, so the footer can count them before any is drawn.
     total = 4
@@ -590,8 +643,8 @@ def build(case, experiment, libraries, results_root, chain, decay, depth, out,
     with PdfPages(out) as pdf:
         cover_page(pdf, case, results, title, subtitle, 1, total)
         table_page(pdf, case, results, half_lives, title, subtitle, 2, total)
-        pathway_page(pdf, case, results, topology, note, half_lives, depth,
-                     abundances, title, subtitle, 3, total)
+        pathway_page(pdf, case, results, routes, note, half_lives, depth,
+                     title, subtitle, 3, total)
         figure_page(pdf, case, results, title, subtitle, 4, total)
         pdf.infodict()["Title"] = f"{title}: {element_name(case)}"
         pdf.infodict()["Subject"] = subtitle
@@ -631,11 +684,15 @@ def main():
     parser.add_argument("--decay", default=DECAY_LIBRARY,
                         help="decay sublibrary supplying half-lives when --chain has "
                              f"no decay/ of its own (default: {DECAY_LIBRARY})")
-    parser.add_argument("--pathway-depth", type=int, default=2,
+    parser.add_argument("--pathway-depth", type=int, default=1,
                         help="how many reaction steps from the foil's own isotopes "
-                             "the pathway page walks. These irradiations are short "
-                             "enough that the inventory is first and second order, "
-                             "so 2 is the honest depth (default: 2)")
+                             "the pathway page walks, not counting decay steps, "
+                             "which are followed regardless. 1 matches the published "
+                             "pages, whose routes are all one reaction and then "
+                             "decay; 2 adds second-order routes like "
+                             "W186(n,3n)W184(n,gamma)W185m, which need a fluence "
+                             "these 5 minute to 7 hour irradiations never reach "
+                             "(default: 1)")
     parser.add_argument("--output", type=pathlib.Path, default=None,
                         help="PDF to write (default: "
                              "results/report_<case>_<experiment>.pdf)")

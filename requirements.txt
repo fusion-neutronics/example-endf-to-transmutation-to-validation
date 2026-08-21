@@ -14,7 +14,12 @@ njoy2016
 # pulls it in; the module you import is `yani` either way (as `pillow` provides
 # `PIL`). Wheels are published for Linux x86_64, Windows x64 and macOS arm64,
 # abi3 from Python 3.10 up, so there is nothing to build.
-yani
+#
+# The floor is for `TransmutationChain.decays`, which make_report.py needs to
+# follow a production route past its neutron reaction. Without it a route stops
+# at the first product and the decay steps that carry it on, which is most of
+# what a pathway analysis is, cannot be derived at all.
+yani>=0.8
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no

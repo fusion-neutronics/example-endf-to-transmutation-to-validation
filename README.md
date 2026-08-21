@@ -212,17 +212,33 @@ W/2000exp_5min against TENDL-2025 they come out at 122.0% and 105.14, against
 `--chain` is optional and only the pathway page depends on it, but prefer the
 library's own chain over a generic one: the isomeric branching that step 1
 writes to `branching/` is what puts `W186(n,2n)W185m` on the page, and on a
-tungsten foil that one path is 98% of the decay heat. Pathways are walked from
-the foil's own isotopes rather than across the whole chain, two reaction steps
-by default, because these irradiations are 5 minutes to 7 hours and nothing
-beyond second order registers in that time.
+tungsten foil that one path is 98% of the decay heat.
 
-Three columns the published reports carry are left out rather than estimated: an
-uncertainty on the calculated value, which needs cross-section covariance
-propagated through the inventory; "Path %", which needs per-reaction rates where
-the saved results keep only the inventory those rates produced; and decay feeds
-past one reaction step, since the chain carries half-lives and topology but not
-decay modes.
+Routes are whole strings, `W186(n,2n)W185m(IT)W185`, one neutron reaction off an
+isotope of the foil and then the decay steps that carry the product on. They are
+walked from the foil's own isotopes rather than across the whole chain: asking
+the chain what makes W187 answers with `Os190(n,a)` and `Ir192(n,npa)` as
+readily as `W186(n,gamma)`, and nothing in a tungsten foil is osmium. One
+reaction step by default, which is what the published pages carry; decay steps
+are followed regardless, since a decay is not a fluence-dependent step.
+
+The order of the routes into one product is fewest steps first and then by name,
+and it deliberately claims nothing more. An earlier version sorted by the
+natural abundance of the isotope a route starts from, which put
+`W184(n,gamma)W185m` above `W186(n,2n)W185m` because W184 is the more abundant
+isotope. That is backwards in a 14 MeV spectrum, and W185m is 98% of the decay
+heat, so the heuristic was wrong on the one row a reader looks at first.
+
+Two columns the published reports carry are left out rather than estimated. An
+uncertainty on the calculated value needs cross-section covariance propagated
+through the inventory. "Path %" needs the rate of each individual edge, which
+the solve computes to build its burnup matrix and does not hand back, so the
+weights cannot be recovered from a result. That second one is also why the
+flux-weighted isomeric branching, the number that would say whether a
+disagreement belongs to a cross section or to a branching ratio, is not on the
+page: it is not in the chain file either, where the dominant tungsten channel
+carries a placeholder `0.0` that the energy-dependent overlay replaces at solve
+time.
 
 ## What comes out
 
