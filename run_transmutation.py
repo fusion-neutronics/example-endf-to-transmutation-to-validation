@@ -150,7 +150,12 @@ def run(case, cross_sections, chain):
             f"--output {cross_sections} --chain {chain}"
         )
 
-    states = material.transmute(schedule)
+    # `transmute` hands back a TransmutationResults keyed by material id, not a
+    # plain list. Its index 0 is the initial composition, so `step_materials` is
+    # the per-step view the slice below counts from. The foil is built without an
+    # explicit id, which files it under 0.
+    results = material.transmute(schedule)
+    states = results.step_materials(material.id or 0)
 
     # One state per schedule step and no initial entry, so the irradiation
     # pulses come first and the measurement starts after them.
