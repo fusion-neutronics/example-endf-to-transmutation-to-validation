@@ -1,0 +1,38 @@
+# NJOY reconstructs the resonances and Doppler broadens, which no library and
+# no language can avoid, so a binary is still needed. njoy2016 is not on PyPI;
+# this wheel puts an `njoy` in the venv's bin/. Use your own build instead with
+# `--njoy`, which is also how you point at the IAEA-NDS fork that FENDL needs.
+--extra-index-url https://shimwell.github.io/wheels
+njoy2016
+
+# yani reads the nuclear data and now makes it too: the ENDF conversion, the
+# reaction topology and the isomeric branching are all functions on the wheel.
+# Nothing here resolves against a sibling checkout, there is no `endf` package
+# pinned to a branch of a fork, and nothing is installed from git.
+#
+# `yani` is a small distribution that pins the compiled `yani-core` wheel and
+# pulls it in; the module you import is `yani` either way (as `pillow` provides
+# `PIL`). Wheels are published for Linux x86_64, Windows x64 and macOS arm64,
+# abi3 from Python 3.10 up, so there is nothing to build.
+#
+# The floor buys three things, all of them load-bearing here:
+#
+#   * `TransmutationChain.decays` (0.8), so make_report.py can follow a
+#     production route past its neutron reaction. Without it a route stops at
+#     the first product and the decay steps that carry it on, which is most of
+#     what a pathway analysis is, cannot be derived at all.
+#   * `TransmutationResults.step_materials` (0.9.0), which run_transmutation.py
+#     calls since `Material.transmute` stopped returning a plain list. Against
+#     0.8 that fails with `AttributeError: 'list' object has no attribute
+#     'step_materials'`, minutes in, after NJOY has already done its work.
+#   * `TransmutationResults.get_reaction_rates` (0.9.0), the per-edge rates the
+#     Path % column is computed from.
+#
+# A floor turns each of those into an unsatisfiable requirement pip reports up
+# front, rather than an AttributeError partway through a run.
+yani>=0.9.0
+
+# The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
+# numpy is not listed separately: one line fewer to read, and there is no
+# arrangement of these two where matplotlib is installed and numpy is not.
+matplotlib
