@@ -1,0 +1,10 @@
+# The venv the README's install step creates.
+.venv/
+__pycache__/
+
+# Everything the three steps produce. `data/` holds the unpacked ENDF, the
+# decay sublibrary and the converted Arrow, `results/` the plots, the JSON and
+# the report PDFs. All of it is rebuilt by running the example, and `data/`
+# alone is over a hundred MB for one foil.
+data/
+results/
