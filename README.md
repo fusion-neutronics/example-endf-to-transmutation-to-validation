@@ -205,26 +205,37 @@ to be read.
 ### A report PDF
 
 ```bash
-python make_report.py --case W
+python make_report.py            # one document per foil, all of its campaigns
+python make_report.py --case W   # just this one
 ```
 
-Binds the per-foil JSON into `results/report_<case>_<experiment>.pdf`: the foil
-named, then the C/E table with an E/C column per library and, under it, the
-nuclide E/C analysis and that library's heat curve; then the production
-pathways, over as many pages as they need; then the heat curves with their
-percentage contributions. Nothing is recomputed: step 2 already wrote the full
-per-nuclide breakdown and the sigma on it, so a report is cheap to regenerate
-and cannot disagree with the run it came from.
+Binds the per-foil JSON into `results/report_<case>.pdf`: the foil named, then
+the C/E table with an E/C column per library and, under it, the nuclide E/C
+analysis and that library's heat curve; then the production pathways, over as
+many pages as they need; then the heat curves with their percentage
+contributions. Nothing is recomputed: step 2 already wrote the full per-nuclide
+breakdown and the sigma on it, so a report is cheap to regenerate and cannot
+disagree with the run it came from.
+
+**One document per foil, covering every campaign it was measured in.** The last
+three pages repeat per campaign. A foil measured more than once is still one
+subject, and the spread between its campaigns is a result about the data rather
+than about any one measurement, so binding them separately hides it. Tungsten's
+three campaigns run 122%, 65% and 20% out, all against the same cross sections;
+iron reads 6% high on `2000exp_5min` and 7% low on `1996exp_5min`.
+
+With no arguments it writes one for every foil that has a result. Which foils,
+which campaigns, which libraries and which chain are all read off what is on
+disk. `--case` picks foils, `--experiments` picks campaigns, and naming exactly
+one campaign puts it back in the filename as `report_<case>_<experiment>.pdf`.
 
 Every column the published reports carry is now on the page, `+/- 6%` and
 `%ΔCnuc` included. A result filed before those existed is still readable: the
 two uncertainty columns are left empty rather than filled with a zero, which
 would be a different claim.
 
-Which libraries to report and which chain to read them against are worked out
-from what is on disk, which is why the line above takes no arguments beyond the
-foil. Both can still be given, and `--libraries` is also how to say which
-library is the primary one, whose absolute values the table carries:
+`--libraries` is also how to say which library is the primary one, whose
+absolute values the table carries:
 
 ```bash
 python make_report.py --case W --libraries tendl-2025 tendl-2017 \
@@ -232,10 +243,10 @@ python make_report.py --case W --libraries tendl-2025 tendl-2017 \
 ```
 
 Beside the PDF go the same tables in a form something else can read:
-`report_<case>_<experiment>.json`, which carries every table with none of the
-page's caps applied, and `report_<case>_<experiment>_ce.csv`, which carries the
-C/E table alone. A PDF is where this report is read and a poor place to get a
-number back out of.
+`report_<case>.json`, which carries every table for every campaign with none of
+the page's caps applied, and `report_<case>_ce.csv`, which carries the C/E
+tables alone, one row per campaign per cooling point. A PDF is where this report
+is read and a poor place to get a number back out of.
 
 The table's two figures of merit are the published ones, the mean of
 `|C/E - 1|` and a mean chi-squared against the measurement's own sigma, which is
