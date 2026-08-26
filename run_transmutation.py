@@ -19,6 +19,13 @@ from endf-b8.1, which yani downloads on first use.
 There is no transport here: the measured spectrum is the input, and yani
 collapses it against the cross sections to get one-group reaction rates, then
 solves the Bateman system over the schedule.
+
+The decay heat comes back with an uncertainty on it. yani resamples the
+activation cross sections from the MF=33 covariance that step 1 wrote beside
+each nuclide, folds each draw against this foil's own spectrum and re-solves the
+schedule, so the spread over the ensemble is the nuclear-data uncertainty on the
+answer. ``--no-uncertainty`` skips it and costs nothing to omit; the mean
+inventories are identical either way.
 """
 
 import argparse
@@ -86,7 +93,139 @@ def scope_of(chain):
     return set(json.loads((chain / "scope.json").read_text()).get("parents", []))
 
 
-def run(case, cross_sections, chain):
+def ensemble_heat(results, material_id, case, volume, steps):
+    """The per-replica decay heat at each cooling step, in uW/g.
+
+    Decay heat is a function of a whole inventory rather than of one nuclide, so
+    it has to be evaluated once per replica and the spread taken over those,
+    which is what ``get_uncertainty_inventories`` hands back. Building it out of
+    per-nuclide sigmas instead would be summing in quadrature over nuclides that
+    are not independent: a parent and its daughter move together under the same
+    resampled cross section, and the resampling exists precisely so that does
+    not have to be assumed away.
+
+    Returns one array of replica totals and one dict of replica series per
+    nuclide, both already scaled to uW/g, or ``None`` if the solve carried no
+    ensemble.
+    """
+    inventories = [results.get_uncertainty_inventories(material_id, step)
+                   for step in steps]
+    if any(sample is None for sample in inventories):
+        return None
+
+    # An ensemble can also come back empty, which is what happens when nothing
+    # in the material had covariance to resample from: cross sections converted
+    # before yani 0.11.0, or converted with --no-covariance, carry no
+    # covariance.arrow, and yani then runs zero replicas rather than failing.
+    # A spread over nothing is not zero and is not a number, and taking it
+    # anyway put a bare NaN in the JSON, which is not valid JSON at all. Treat
+    # it as the absence it is; `report_uncertainty` says so and names the fix.
+    if any(len(sample) < 2 for sample in inventories):
+        return None
+
+    scale = 1e6 / case.mass_g
+    totals, by_nuclide = [], []
+    for step_samples in inventories:
+        step_totals, step_nuclides = [], []
+        for densities in step_samples:
+            state = yani.Material.from_atom_densities(
+                densities, volume=volume, temperature=TEMPERATURE)
+            contributions = state.decay_heat(by_nuclide=True)
+            step_totals.append(sum(contributions.values()) * scale)
+            step_nuclides.append({n: w * scale for n, w in contributions.items()})
+        totals.append(step_totals)
+        by_nuclide.append(step_nuclides)
+    return np.array(totals, dtype=float), by_nuclide
+
+
+def spread(samples, keys=None):
+    """Standard deviation over an ensemble: the sigma on the value, not on its mean.
+
+    The quantity wanted is how far the answer moves when the cross sections move
+    within their covariance, which is the width of the ensemble. Dividing by
+    root-N would give the error on where its centre sits, which is a statement
+    about how many replicas were run and shrinks to nothing if enough are.
+
+    ``ddof=1`` because these are samples of that distribution and not the
+    population: with the replica count left to converge rather than fixed the
+    difference is small, but the biased estimator would read as a slightly
+    tighter answer than the sampling supports.
+    """
+    if keys is None:
+        return np.std(samples, axis=1, ddof=1)
+    return [{key: float(np.std([sample.get(key, 0.0) for sample in step], ddof=1))
+             for key in keys}
+            for step in samples]
+
+
+def report_uncertainty(info, relative):
+    """What the sigma covered, printed under the C/E it qualifies.
+
+    A sigma is only readable next to what it left out. A zero on a nuclide whose
+    evaluation states no MF=33 looks exactly like a zero on one that is well
+    known, and the printed median would read as a whole-of-answer uncertainty
+    when it covers the activation cross sections alone. Both come off the info
+    yani files rather than being restated here, so this cannot drift from what
+    the run actually did.
+    """
+    if relative is None:
+        # The run asked for an uncertainty and got no ensemble back, which is
+        # not the same as not asking. Say which, and say what to do about it.
+        print("uncertainty: asked for, but no covariance was available to "
+              "resample from.")
+        print("             These cross sections carry no covariance.arrow. "
+              "Reconvert them")
+        print("             without --no-covariance to fill the +/- and %dCnuc "
+              "columns:")
+        print("             python convert_to_arrow.py --case <foil>")
+        missing = info.get("no_covariance_data") or []
+        if missing:
+            print(f"             ({' '.join(sorted(missing))} reported no "
+                  f"covariance data)")
+        return
+
+    lines = []
+    if len(relative):
+        lines.append(f"{np.median(relative) * 100:.1f}% median on the decay heat "
+                     f"({relative.min() * 100:.1f}% to {relative.max() * 100:.1f}%)")
+
+    samples, converged = info.get("samples"), info.get("converged")
+    if samples is not None:
+        settled = "converged" if converged else "hit the replica cap unconverged"
+        lines.append(f"{samples} replicas, {settled}")
+
+    perturbed = info.get("perturbed") or []
+    missing = info.get("no_covariance_data") or []
+    lines.append(f"{len(perturbed)} nuclides perturbed from MF=33 covariance")
+    if missing:
+        # Not a failure and not a warning to be silenced: it is the reason a
+        # product can come back with a sigma of zero, which otherwise reads as
+        # the most confident number in the table.
+        lines.append(f"nothing published for {' '.join(sorted(missing))}, so "
+                     f"reactions on them contribute no sigma")
+
+    sampled, floored = info.get("rates_sampled") or 0, info.get("rates_floored") or 0
+    if sampled and floored / sampled > 0.01:
+        lines.append(f"{100.0 * floored / sampled:.1f}% of sampled rates went "
+                     f"negative and were truncated at zero, biasing the mean up")
+
+    clipped = info.get("matrices_clipped") or 0
+    if clipped:
+        worst = info.get("worst_relative_clip") or 0.0
+        matrices = "matrix" if clipped == 1 else "matrices"
+        lines.append(f"{clipped} covariance {matrices} repaired to positive "
+                     f"semi-definite, worst by {worst * 100:.1f}%")
+
+    not_perturbed = info.get("not_perturbed") or []
+    if not_perturbed:
+        lines.append("not propagated: " + ", ".join(not_perturbed))
+
+    label = "uncertainty: "
+    for index, line in enumerate(lines):
+        print((label if index == 0 else " " * len(label)) + line)
+
+
+def run(case, cross_sections, chain, uncertainty=None):
     """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
     yani.cross_section_data = str(cross_sections)
     yani.transmutation_decay_data = DECAY_LIBRARY
@@ -154,8 +293,15 @@ def run(case, cross_sections, chain):
     # plain list. Its index 0 is the initial composition, so `step_materials` is
     # the per-step view the slice below counts from. The foil is built without an
     # explicit id, which files it under 0.
-    results = material.transmute(schedule)
-    states = results.step_materials(material.id or 0)
+    #
+    # `data_uncertainty` resamples the activation cross sections from the MF=33
+    # covariance step 1 wrote, folds each draw against this spectrum and
+    # re-solves. The solver itself is untouched and only its input moves, so the
+    # mean inventories are what they would have been; omitting the argument reads
+    # no covariance and costs nothing.
+    results = material.transmute(schedule, data_uncertainty=uncertainty)
+    material_id = material.id or 0
+    states = results.step_materials(material_id)
 
     # One state per schedule step and no initial entry, so the irradiation
     # pulses come first and the measurement starts after them.
@@ -165,6 +311,22 @@ def run(case, cross_sections, chain):
         heat.append(sum(contributions.values()) / case.mass_g * 1e6)
         breakdown.append(contributions)
     heat = np.array(heat)
+
+    # The same cooling points, indexed the way the results are rather than the
+    # way `states` is: `step_materials` drops the initial composition and the
+    # results keep it at 0, so a cooling point j sits at step j + 1 in the
+    # results once the irradiation pulses are counted off.
+    cooling_steps = range(len(case.irradiation) + 1, results.num_steps + 1)
+    sigma, by_nuclide_sigma, info = None, None, None
+    if uncertainty is not None:
+        info = results.data_uncertainty_info
+        ensemble = ensemble_heat(results, material_id, case, material.volume,
+                                 cooling_steps)
+        if ensemble is not None:
+            totals, per_nuclide = ensemble
+            sigma = spread(totals)
+            by_nuclide_sigma = spread(per_nuclide,
+                                      keys=sorted({n for step in breakdown for n in step}))
 
     # The rate of every production edge the solve drove, which yani-core 0.9.0
     # hands back and earlier versions computed and threw away
@@ -180,7 +342,7 @@ def run(case, cross_sections, chain):
     # placeholder the energy-dependent overlay replaces at solve time.
     edges = {}
     for step, (seconds, _flux) in enumerate(case.irradiation):
-        for parent, kinds in (results.get_reaction_rates(material.id or 0, step)
+        for parent, kinds in (results.get_reaction_rates(material_id, step)
                               or {}).items():
             for kind, targets in kinds.items():
                 for target, rate in targets:
@@ -195,7 +357,7 @@ def run(case, cross_sections, chain):
     # results is the composition before any step; `states` deliberately skips
     # it, so this asks the results rather than reusing `states[0]`, which is the
     # material after the first pulse and already burnt.
-    initial = results.get_material(material.id or 0, 0)
+    initial = results.get_material(material_id, 0)
     initial_atoms = dict(initial.nuclides) if initial is not None else {}
 
     # An irradiated foil always activates, so heat that is identically zero
@@ -218,7 +380,7 @@ def run(case, cross_sections, chain):
             f"  python convert_to_arrow.py --case {case.name} "
             f"--output {cross_sections} --chain {chain}"
         )
-    return heat, breakdown, edge_rates, initial_atoms
+    return heat, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma, info
 
 
 def summarise(case, calculated):
@@ -233,7 +395,7 @@ def summarise(case, calculated):
     }
 
 
-def plot(case, calculated, breakdown, ratio, metrics, out_dir):
+def plot(case, calculated, breakdown, ratio, metrics, out_dir, sigma=None):
     times, measured, uncertainty = case.times, case.measured, case.uncertainty
     figure, (top, bottom) = plt.subplots(
         2, 1, figsize=(8, 8), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
@@ -245,6 +407,14 @@ def plot(case, calculated, breakdown, ratio, metrics, out_dir):
         top.plot(times, calculated, "-", color="#d62728", linewidth=2,
                  label="yani", zorder=2)[0],
     ]
+
+    # Both curves carry an uncertainty and the comparison is only readable when
+    # both are drawn: a calculation half a decade from the measurement is a
+    # different statement depending on whether its own band is 5% or 50% wide.
+    if sigma is not None:
+        handles.append(top.fill_between(
+            times, calculated - sigma, calculated + sigma, color="#d62728",
+            alpha=0.2, linewidth=0, zorder=1, label="cross-section covariance"))
 
     # Name the products that carry the heat, so the curve is readable as physics
     # rather than as one number.
@@ -291,6 +461,12 @@ def plot(case, calculated, breakdown, ratio, metrics, out_dir):
     bottom.axhline(1.0, color="black", linewidth=1)
     bottom.fill_between(times, 1 - uncertainty / measured, 1 + uncertainty / measured,
                         color="black", alpha=0.15, label="measurement uncertainty")
+    if sigma is not None:
+        relative = np.divide(sigma, calculated,
+                             out=np.zeros_like(sigma), where=calculated > 0)
+        bottom.fill_between(times, ratio * (1 - relative), ratio * (1 + relative),
+                            color="#d62728", alpha=0.2, linewidth=0,
+                            label="cross-section covariance")
     bottom.plot(times, ratio, "o-", color="#d62728", markersize=4)
     bottom.set_xlabel(f"time after shutdown [{case.time_unit}]")
     bottom.set_ylabel("yani / measured")
@@ -335,6 +511,19 @@ def main():
     parser.add_argument("--source", default=None,
                         help="folder name to file this run's data and results under "
                              "(default: the library name, or the --endf-dir directory name)")
+    parser.add_argument("--no-uncertainty", action="store_true",
+                        help="skip the nuclear-data uncertainty, leaving the decay "
+                             "heat as a bare value. The mean is identical either way")
+    parser.add_argument("--samples", type=int, default=None,
+                        help="fixed replica count for the uncertainty (default: let "
+                             "yani add replicas until the sigmas settle). This bounds "
+                             "cost or reproduces a specific run; it is not an "
+                             "accuracy dial")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="base seed for the resampling (default: 42). A nuclide's "
+                             "perturbation is a function of (seed, replica, nuclide), "
+                             "so the same seed reproduces a run whatever the replica "
+                             "count")
     args = parser.parse_args()
 
     # Results and inputs live under the name of the nuclear data they came from,
@@ -391,17 +580,30 @@ def main():
     print(f"case: {case.describe()}")
     print(f"spectrum: {fns_case.GROUPS} CCFE groups, {case.spectrum.sum():.4g} n/cm2/s summed")
 
-    calculated, breakdown, edge_rates, initial_atoms = run(
-        case, args.cross_sections, args.chain)
-    ratio, metrics = summarise(case, calculated)
-    plot(case, calculated, breakdown, ratio, metrics, args.output)
+    uncertainty = None if args.no_uncertainty else yani.DataUncertainty(
+        seed=args.seed, samples=args.samples)
 
-    print(f"\n{case.time_unit:>9}  {'measured':>10}  {'yani':>10}  {'C/E':>6}")
-    for time, exp, calc, r in zip(case.times, case.measured, calculated, ratio):
-        print(f"{time:9.2f}  {exp:10.3e}  {calc:10.3e}  {r:6.3f}")
+    calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma, info = run(
+        case, args.cross_sections, args.chain, uncertainty)
+    ratio, metrics = summarise(case, calculated)
+    plot(case, calculated, breakdown, ratio, metrics, args.output, sigma)
+
+    relative = (np.divide(sigma, calculated, out=np.zeros_like(sigma),
+                          where=calculated > 0) if sigma is not None else None)
+    header = f"\n{case.time_unit:>9}  {'measured':>10}  {'yani':>10}"
+    header += "  +/-" if sigma is not None else ""
+    print(header + f"  {'C/E':>6}")
+    for index, (time, exp, calc, r) in enumerate(
+            zip(case.times, case.measured, calculated, ratio)):
+        line = f"{time:9.2f}  {exp:10.3e}  {calc:10.3e}"
+        if relative is not None:
+            line += f"  {relative[index] * 100:3.0f}%"
+        print(line + f"  {r:6.3f}")
     print(f"\nmedian C/E {metrics['median_ratio']:.3f}, "
           f"mean deviation {metrics['mean_deviation_percent']:.1f}%, "
           f"measurement sigma {metrics['median_measurement_sigma_percent']:.1f}%")
+    if info is not None:
+        report_uncertainty(info, relative)
 
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / f"fns_{case.name}_{case.experiment}.json").write_text(json.dumps({
@@ -422,6 +624,14 @@ def main():
         # production routes with these; see `run` for what the number is.
         "edge_rates": edge_rates,
         "initial_atoms_per_barn_cm": initial_atoms,
+        # The nuclear-data uncertainty, absolute and in the same units as the
+        # value beside it, so a reader never has to know which of the two a
+        # percentage was taken against. `data_uncertainty_info` travels with it
+        # because a sigma of zero means "no covariance published" as often as it
+        # means "well known", and only the info says which.
+        "yani_uncertainty_uW_per_g": None if sigma is None else sigma.tolist(),
+        "by_nuclide_uncertainty_uW_per_g": by_nuclide_sigma,
+        "data_uncertainty_info": info,
     }, indent=2))
 
 
