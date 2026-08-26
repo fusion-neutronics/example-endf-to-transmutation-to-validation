@@ -5,9 +5,10 @@ Reads the per-foil JSON that ``run_transmutation.py`` and ``sweep_fns.py``
 already write, one sweep per library, and lays them out in the page order the
 UKAEA decay-heat validation reports use:
 
-    make_report.py --case W
+    make_report.py                 # one document per foil, all of its campaigns
+    make_report.py --case W        # just this one
 
-    cover page               the foil, named
+    cover page               the foil, named, and one line per campaign
     C/E table                one row per cooling point, one E/C column per
                              library, the nuclide E/C analysis under it saying
                              which product carries the disagreement, and that
@@ -16,10 +17,17 @@ UKAEA decay-heat validation reports use:
                              product, over as many pages as they need
     figure page              heat curves and % contributions, one row per library
 
-Which libraries to report and which chain to read them against are worked out
-from what is on disk, so the common case takes no arguments beyond the foil.
-Both can still be given, and `--libraries` is also how to choose which library
-is the primary one.
+The last three repeat per campaign, because one foil is one document. A foil
+measured more than once is still one subject, and the spread between its
+campaigns is a result about the data rather than about any one measurement:
+iron reads 6% high against ``2000exp_5min`` and 7% low against
+``1996exp_5min``, which is a statement neither report makes on its own.
+Tungsten's three run 122%, 65% and 20% out.
+
+Which foils, which campaigns, which libraries and which chain are all worked out
+from what is on disk, so the common case takes no arguments at all. Each can be
+given instead, and ``--libraries`` is also how to choose which library is the
+primary one.
 
 The same tables are written beside the PDF in a form something else can read: a
 JSON carrying all of them, uncapped, and a CSV of the C/E table.
@@ -28,15 +36,30 @@ Nothing is recomputed: the inventory solve happened in step 2 and its full
 per-nuclide breakdown is in the JSON, so a report is cheap to regenerate and
 cannot disagree with the run it came from.
 
-One column the published reports carry is NOT reproduced here, because the data
-needed for it is not reachable. It is left out rather than filled with a
-plausible number:
+Every column the published reports carry is now filled. Three were structural
+omissions rather than oversights, and are recorded here because the reason each
+one was empty says what it is:
 
-* An uncertainty on the calculated value (the reports print "+/- 6%"). That is
-  cross-section covariance propagated through the inventory, which yani does not
-  currently produce, so the calculated column here is a bare value.
-Two omissions have since been filled and are recorded here because the reasons
-were structural, not oversights.
+* An uncertainty on the calculated value (the reports print "+/- 6%"), and with
+  it ``%dC_nuc`` in the nuclide analysis. Both are cross-section covariance
+  carried through the inventory. yani-core 0.11.0 reads the MF=33 covariance
+  step 1 now writes beside each nuclide, resamples the activation cross sections
+  from it, folds each draw against the foil's own spectrum and re-solves, so the
+  spread over that ensemble is the number. Step 2 writes it into its JSON and
+  both columns are read from there.
+
+  The total is taken over whole inventories rather than assembled from
+  per-nuclide sigmas. Decay heat is a function of an inventory, and a parent and
+  its daughter move together under one resampled cross section, so quadrature
+  over nuclides would claim an independence that the resampling exists to avoid
+  assuming. ``%dC_nuc`` is the narrower thing: one product's own spread, which
+  is what says whether the row beside it is inside what its cross sections can
+  account for.
+
+  A sigma of zero is not a claim of certainty. An evaluation carrying no MF=33
+  is perturbed by nothing, so its products come back exact; step 2 files
+  ``data_uncertainty_info`` alongside, which names those nuclides, and a run
+  made without the covariance leaves both columns empty rather than at zero.
 
 * Decay feeds. ``TransmutationChain`` gained ``decays`` in yani 0.8, so a route
   can be followed past its neutron reaction and ``W186(n,2n)W185_m1(IT)W185`` is
@@ -60,9 +83,11 @@ were structural, not oversights.
   carries 98% of the decay heat at the first cooling point, and without it 10%.
   The split the solve actually used is now printed rather than inferred.
 
-That is why this script needs yani 0.9.0 or newer. A result filed by an older
-run carries no rates, and the pathway page falls back to the unweighted order
-and says so rather than printing zeros.
+That is why this script needs yani 0.11.1 or newer. It still reads a result
+filed by an older run: one with no per-edge rates falls back to the unweighted
+route order and says so rather than printing zeros, and one with no sigma leaves
+the two uncertainty columns empty rather than at zero. What it will not do is
+invent either from what is there.
 
 One difference from the published pages is deliberate rather than a gap. They
 write an isomer as ``W185m`` and a second metastable state as ``Ta182n``; every
@@ -79,6 +104,7 @@ import csv
 import json
 import pathlib
 import tempfile
+import textwrap
 
 import matplotlib
 
@@ -105,6 +131,12 @@ PANEL_ASPECT = 0.78
 # it is left as margin. Past about here a panel starts to read as a column
 # rather than a plot, which is the shape the fixed layout was drawn to avoid.
 PANEL_ASPECT_MAX = 1.15
+
+# How far past the data a heat panel's y axis runs, as a factor on each end.
+# 2.0 is about a third of a decade of air above and below, enough that the top
+# curve is not jammed against the frame and little enough that it is still the
+# data setting the scale.
+PANEL_HEADROOM = 2.0
 
 # The least height, as a fraction of the page, worth giving the heat curve that
 # sits under the C/E table. What the tables leave is not fixed: a foil with 20
@@ -192,6 +224,14 @@ SPLITS_SHOWN = 6
 
 # The cover page names the foil. Element symbols only; the benchmark's four
 # alloy foils (Inc600, NiCr, SS304, SS316) are already their own names.
+# The order the published reports bind a foil's campaigns in, which is also the
+# order they are worth reading. 2000exp_5min is the only one covering all 73
+# foils, so it leads and is the one a single-experiment report defaults to;
+# 1996exp_7hour is last because it is the odd one out, irradiating long enough
+# to build up products the 5 minute runs never reach. Anything not named here
+# sorts after these, alphabetically, rather than being dropped.
+EXPERIMENT_ORDER = ("2000exp_5min", "1996exp_5min", "1996exp_7hour")
+
 # The decay library the reaction data is paired with. TENDL publishes no decay
 # sublibrary, so this is the same default run_transmutation.py holds, and the
 # same reason: half-lives have to come from somewhere.
@@ -519,6 +559,162 @@ def calculated_of(result):
     )
 
 
+def format_percent(value):
+    """A sigma as the published tables print it, without rounding a small one to zero.
+
+    Whole percent, because that is what the reports carry and a second decimal
+    on a Monte Carlo spread is noise. The exception is a value that rounds to
+    zero: ``0%`` and ``-`` would then be the two ways of saying "no uncertainty
+    here", one of which means the nuclide is well determined and the other that
+    nothing was published about it. ``<1%`` keeps them apart.
+    """
+    if value is None:
+        return "-"
+    if 0.0 < value < 0.5:
+        return "<1%"
+    return f"{value:.0f}%"
+
+
+def uncertainty_of(result):
+    """The nuclear-data sigma on the calculated heat, or None if the run carried none.
+
+    Absent for a run made with ``--no-uncertainty``, for one made against cross
+    sections converted without the covariance, and for every result filed before
+    yani-core 0.11.0, which could not produce it. The distinction does not matter
+    to a caller: the column is filled when there is a number and left off when
+    there is not, which is what it did for every library before this existed.
+    """
+    values = result.get("yani_uncertainty_uW_per_g")
+    return None if values is None else np.array(values, dtype=float)
+
+
+def uncertainty_percent(result):
+    """That sigma as a percentage of the value it sits on, per cooling point.
+
+    Relative rather than absolute because that is how the published tables print
+    it, and because a percentage is the form that can be compared against the
+    measurement's own sigma in the column beside it without dividing anything.
+    """
+    sigma = uncertainty_of(result)
+    if sigma is None:
+        return None
+    calculated = calculated_of(result)
+    return 100.0 * np.divide(sigma, calculated, out=np.zeros_like(sigma),
+                             where=calculated > 0)
+
+
+def coverage_note(result):
+    """What the sigma on this page left out, or None if it left nothing out.
+
+    The two uncertainty columns are only honest next to this. A nuclide whose
+    evaluation states no MF=33 is perturbed by nothing and comes back exact,
+    which is indistinguishable on the page from one that is well determined;
+    samples truncated at zero bias the mean upward; and sigmas that had not
+    settled are a floor rather than a value. All three are counted by yani
+    rather than inferred here, so this cannot claim a coverage the run did not
+    have.
+    """
+    info = result.get("data_uncertainty_info")
+    if not info or uncertainty_of(result) is None:
+        # No sigma on the page at all, so there are no columns for this to
+        # qualify. The caption already says the run carried no covariance;
+        # listing every nuclide that had none would say it a second time.
+        return None
+
+    parts = []
+    missing = info.get("no_covariance_data") or []
+    if missing:
+        parts.append(f"No MF=33 covariance for {', '.join(sorted(missing))}: "
+                     f"reactions on them contribute no sigma, so a product made "
+                     f"only from them reads as exact.")
+
+    sampled = info.get("rates_sampled") or 0
+    floored = info.get("rates_floored") or 0
+    if sampled and floored / sampled > 0.01:
+        parts.append(f"{100.0 * floored / sampled:.1f}% of sampled rates went "
+                     f"negative and were truncated at zero, biasing the mean up.")
+
+    samples = info.get("samples")
+    if samples is not None and not info.get("converged", True):
+        parts.append(f"The spread had not settled at {samples} replicas, so these "
+                     f"sigmas are a floor.")
+
+    # Deliberately not on the page: `matrices_clipped`, the covariances that were
+    # not positive semi-definite and had to be repaired before they could be
+    # sampled from. It is real and it is in the JSON and on step 2's stdout, but
+    # a repair of a couple of percent is below the precision of every number
+    # printed here, and the lines it would cost are the heat curve underneath.
+    # What is kept above is the set that changes how a number is read.
+    return " ".join(parts) or None
+
+
+def nuclide_uncertainty_percent(result, nuclide, index):
+    """One product's own relative sigma at one cooling point, or None.
+
+    This is the product's share of the calculation moving under the resampled
+    cross sections, not its contribution to the total sigma. The two differ
+    whenever more than one product carries the heat, so the caption on the page
+    says which one it is.
+    """
+    steps = result.get("by_nuclide_uncertainty_uW_per_g")
+    if not steps or index >= len(steps):
+        return None
+    sigma = steps[index].get(nuclide)
+    heat = result["by_nuclide_uW_per_g"][index].get(nuclide)
+    if sigma is None or not heat:
+        return None
+    return 100.0 * sigma / heat
+
+
+def experiment_order(experiments):
+    """The published page order, with anything unrecognised after it by name."""
+    return sorted(experiments, key=lambda name: (
+        EXPERIMENT_ORDER.index(name) if name in EXPERIMENT_ORDER
+        else len(EXPERIMENT_ORDER), name))
+
+
+def filed_results(results_root):
+    """Every ``(foil, experiment)`` a result was filed for, under any library.
+
+    The two roots are the ones ``load_results`` reads, so what this finds is
+    exactly what can be reported. Split against the benchmark's own foil names
+    rather than on the underscore, because a foil name is not guaranteed to be
+    free of one and an experiment name is not guaranteed to be a single field;
+    longest foil name first, so ``SS316`` cannot be read as ``SS3``.
+    """
+    import fns_case
+
+    known = sorted(fns_case.cases(), key=len, reverse=True)
+    found = set()
+    if not results_root.is_dir():
+        return found
+    for pattern in ("*/fns_*.json", "*/sweep/fns_*.json"):
+        for path in results_root.glob(pattern):
+            stem = path.stem[len("fns_"):]
+            for case in known:
+                if stem.startswith(f"{case}_"):
+                    found.add((case, stem[len(case) + 1:]))
+                    break
+    return found
+
+
+def discover_cases(results_root):
+    """Every foil with a result, so a report can be written for each of them."""
+    return sorted({case for case, _experiment in filed_results(results_root)})
+
+
+def discover_experiments(case, results_root):
+    """Every campaign this foil has a result for, in published page order.
+
+    Discovered from the results rather than from the benchmark, because a foil
+    measured three times is not thereby a foil that has been run three times,
+    and a report naming a page it has no numbers for is worse than one that
+    binds what exists and says what is missing.
+    """
+    return experiment_order({experiment for filed, experiment
+                             in filed_results(results_root) if filed == case})
+
+
 def discover_libraries(case, experiments, results_root):
     """Every library under `results_root` that has a result for this foil.
 
@@ -661,8 +857,10 @@ def nuclide_analysis(result, half_lives, floor=NUCLIDE_EC_FLOOR):
     the calculation is a statement about that product, and the published table
     prints exactly one row for tungsten's 5 minute irradiation for that reason.
 
-    ``%dC_nuc`` is the one column of the published table that cannot be filled
-    at all, so it is not returned here. See the module docstring.
+    ``%dC_nuc`` is that product's own relative sigma under the resampled
+    activation cross sections, read at the same point. It is the column that
+    says whether the disagreement beside it is inside what the nuclear data can
+    account for, and it is empty for a run made without the covariance.
     """
     values = score(result)
     times = np.array(result["times"], dtype=float)
@@ -678,6 +876,7 @@ def nuclide_analysis(result, half_lives, floor=NUCLIDE_EC_FLOOR):
             "e_over_c": (1.0 / ratio) if ratio and np.isfinite(ratio) else None,
             "measurement_percent": (100.0 * values["sigma"][index] / measured
                                     if measured else None),
+            "calculated_percent": nuclide_uncertainty_percent(result, nuclide, index),
         })
     return rows
 
@@ -843,20 +1042,26 @@ def cover_page(pdf, case, sections, title, subtitle, number, total):
     figure.text(0.5, 0.625, f"libraries: {libraries}", ha="center", fontsize=9,
                 color="#555555")
 
+    # The primary library's own uncertainty belongs on the one-glance summary,
+    # because a mean deviation is only a verdict next to it: 122% against a
+    # calculation good to 6% is a result, and against one good to 60% is not.
     rows = []
     for experiment, results in sections:
         _name, result = results[0]
         values = score(result)
         ratio = np.array(result["ratio"], dtype=float)
+        percent = uncertainty_percent(result)
         rows.append([experiment, f"{np.nanmedian(ratio):.3f}",
                      f"{values['mean_percent_diff']:.1f}",
+                     "-" if percent is None else f"{np.median(percent):.1f}",
                      f"{values['mean_chi2']:.2f}", f"{len(ratio)}"])
     table(figure, [("Experiment", "", "l", 1.6),
                    ("median C/E", "", "r", 1.0),
                    ("mean % diff", "", "r", 1.0),
+                   ("data sigma %", "", "r", 1.1),
                    ("mean chi2", "", "r", 0.9),
                    ("points", "", "r", 0.6)],
-          rows, 0.55, left=0.20, right=0.80)
+          rows, 0.55, left=0.14, right=0.86)
     pdf.savefig(figure)
     plt.close(figure)
 
@@ -882,19 +1087,28 @@ def table_page(pdf, case, results, half_lives, title, subtitle, number, total):
     # its single E/C column.
     columns = [("Times", unit[:8], "r", 0.9),
                ("FNS Exp.", "µW/g", "r", 1.5),
-               ("", "µW/g", "r", 1.1),
+               ("", "µW/g", "r", 1.5 if uncertainty_of(primary) is not None else 1.1),
                ("", "E/C", "r", 0.8)]
     columns += [(name[:12], "E/C", "r", 0.8) for name, _ in scores[1:]]
     spans = [(primary_name[:20], 2, 3)]
+
+    # The calculated column carries its own uncertainty when the run produced
+    # one, which is what makes the E/C beside it readable: a ratio of 0.39 is a
+    # disagreement if the calculation is good to 6% and barely a statement if it
+    # is good to 60%. Without covariance the column is a bare value, as it was.
+    calculated_percent = uncertainty_percent(primary)
 
     rows = []
     for index, moment in enumerate(times):
         measured = primary["measured_uW_per_g"][index]
         sigma = primary["measured_uncertainty"][index]
         percent = 100.0 * sigma / measured if measured else float("nan")
+        value = f"{scores[0][1]['calculated'][index]:.2E}"
+        if calculated_percent is not None:
+            value += f" +/- {format_percent(calculated_percent[index])}"
         row = [f"{moment:.2f}",
                f"{measured:.2E} +/- {percent:.0f}%",
-               f"{scores[0][1]['calculated'][index]:.2E}"]
+               value]
         for _name, values in scores:
             ratio = values["ratio"][index]
             row.append(f"{1.0 / ratio:.2f}"
@@ -931,18 +1145,31 @@ def table_page(pdf, case, results, half_lives, title, subtitle, number, total):
         f"{row['share_of_calculated'] * 100:.1f}%",
         f"{row['at_time']:.2f}",
         f"{row['e_over_c']:.2f}" if row["e_over_c"] is not None else "-",
-        (f"{row['measurement_percent']:.0f}%"
-         if row["measurement_percent"] is not None else "-"),
-        "-",
+        format_percent(row["measurement_percent"]),
+        format_percent(row["calculated_percent"]),
     ] for row in analysis]
     bottom = table(figure, product_columns, product_rows, bottom - 0.040,
                    right=0.72)
 
     caption = ("E/C is the total at that cooling point, read where the product carries "
-               "most of the\ncalculation; the measurement is a calorimeter reading and "
-               "does not come apart by\nnuclide. %ΔCnuc needs cross-section covariance "
-               "carried through the inventory,\nwhich yani does not yet produce, so it "
-               "is left empty rather than guessed at.")
+               "most of the\ncalculation; a calorimeter reading does not come apart by "
+               "nuclide. %ΔE is the\nmeasurement's own sigma there, %ΔCnuc that "
+               "product's own spread under its resampled\ncross sections. The +/- on "
+               "the µW/g column is the total, taken over whole inventories\nso that a "
+               "parent and its daughter move together rather than in quadrature.")
+    if uncertainty_of(primary) is None:
+        caption = ("E/C is the total at that cooling point, read where the product "
+                   "carries most of the\ncalculation; the measurement is a calorimeter "
+                   "reading and does not come apart by\nnuclide. %ΔCnuc is empty because "
+                   "this run carried no cross-section covariance:\nconvert without "
+                   "--no-covariance and run without --no-uncertainty to fill it.")
+    # What the sigmas left out, printed under them rather than in a footnote
+    # nobody reaches. Absent when the run left nothing out, which is the common
+    # case and does not need saying.
+    note = coverage_note(primary)
+    if note:
+        caption += "\n" + "\n".join(textwrap.wrap(note, 86))
+
     figure.text(0.08, bottom - 0.014, caption, va="top", fontsize=7.2,
                 color="#555555")
     bottom -= 0.014 + text_height(figure, caption, 7.2)
@@ -1211,6 +1438,39 @@ def product_colours(products):
     return [palette(index % palette.N) for index in range(len(products))]
 
 
+def heat_limits(values, headroom=PANEL_HEADROOM):
+    """Y limits covering the total and the measurement, and deliberately nothing else.
+
+    The panel exists so those two can be read against each other, so those two
+    are what set its scale. Ranging on the products instead spends the axis on
+    curves that are decades below the total: on tungsten they reach 1e-7 while
+    the total never leaves its top three decades, which squeezes the only
+    comparison the page is about into the top fifth of the box, and on iron,
+    whose total is nearly flat, into a sliver where a 6% disagreement is
+    invisible.
+
+    Products that fall below the floor clip, which costs nothing here: they are
+    ranked properly on the share panel beside this one, and every one of them is
+    in the JSON. The measurement's error bars are included because a lower bar
+    can reach under the lowest measured point.
+
+    Returns ``None`` when nothing is positive, which a log axis cannot show
+    anyway; the caller then leaves matplotlib's own limits alone.
+    """
+    edges = np.concatenate([
+        np.asarray(values["calculated"], dtype=float),
+        np.asarray(values["measured"], dtype=float),
+        np.asarray(values["measured"], dtype=float)
+        - np.asarray(values["sigma"], dtype=float),
+        np.asarray(values["measured"], dtype=float)
+        + np.asarray(values["sigma"], dtype=float),
+    ])
+    edges = edges[np.isfinite(edges) & (edges > 0)]
+    if not edges.size:
+        return None
+    return edges.min() / headroom, edges.max() * headroom
+
+
 def draw_heat(axes, case, library, result, values, products, colours, fontsize=6.5):
     """The decay-heat curve: each named product, their total, and the measurement."""
     times = np.array(result["times"], dtype=float)
@@ -1224,9 +1484,9 @@ def draw_heat(axes, case, library, result, values, products, colours, fontsize=6
               label="Total", zorder=2)
     axes.set_xscale("log")
     axes.set_yscale("log")
-    positive = values["calculated"][values["calculated"] > 0]
-    if positive.size:
-        axes.set_ylim(positive.min() / 1e3, positive.max() * 5)
+    limits = heat_limits(values)
+    if limits is not None:
+        axes.set_ylim(*limits)
     axes.set_xlabel(f"Time after irradiation [{result['time_unit']}]", fontsize=fontsize)
     axes.set_ylabel("Heat Output [µW/g]", fontsize=fontsize)
     axes.set_title(f"FNS {result['experiment']} - {case} - {library}",
@@ -1369,10 +1629,14 @@ def write_data(out, case, sections, half_lives, routes, depth):
             "libraries": [{
                 "library": library,
                 "calculated_uW_per_g": calculated_of(result).tolist(),
+                "calculated_uncertainty_uW_per_g": (
+                    None if uncertainty_of(result) is None
+                    else uncertainty_of(result).tolist()),
                 "e_over_c": [(1.0 / r) if r and np.isfinite(r) else None
                              for r in score(result)["ratio"]],
                 "mean_percent_diff": score(result)["mean_percent_diff"],
                 "mean_chi2": score(result)["mean_chi2"],
+                "data_uncertainty_info": result.get("data_uncertainty_info"),
             } for library, result in results],
             "nuclide_analysis": nuclide_analysis(primary, half_lives),
             "pathways": pathway_data(primary, routes, half_lives),
@@ -1389,7 +1653,8 @@ def write_data(out, case, sections, half_lives, routes, depth):
     header = ["experiment", "time", "time_unit", "measured_uW_per_g",
               "measured_uncertainty_uW_per_g"]
     for library in libraries:
-        header += [f"{library}_uW_per_g", f"{library}_E_over_C"]
+        header += [f"{library}_uW_per_g", f"{library}_uncertainty_uW_per_g",
+                   f"{library}_E_over_C"]
     with csv_path.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(header)
@@ -1399,7 +1664,9 @@ def write_data(out, case, sections, half_lives, routes, depth):
                        block["measured_uW_per_g"][index],
                        block["measured_uncertainty_uW_per_g"][index]]
                 for entry in block["libraries"]:
+                    sigma = entry["calculated_uncertainty_uW_per_g"]
                     row += [entry["calculated_uW_per_g"][index],
+                            "" if sigma is None else sigma[index],
                             entry["e_over_c"][index]]
                 writer.writerow(row)
 
@@ -1473,14 +1740,16 @@ def build(case, experiments, libraries, results_root, chain, decay, depth, out,
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--case", required=True,
-                        help="foil to report, as named in the benchmark (W, Fe, SS316)")
-    parser.add_argument("--experiments", nargs="+", default=["2000exp_5min"],
-                        help="which experiments to report, in page order. A foil "
-                             "measured more than once belongs in one document: "
-                             "tungsten has 2000exp_5min, 1996exp_5min and "
-                             "1996exp_7hour, and the spread between them is a "
-                             "result (default: 2000exp_5min)")
+    parser.add_argument("--case", nargs="+", default=None,
+                        help="foils to report, as named in the benchmark (W, Fe, "
+                             "SS316), one document each. Default: every foil that "
+                             "has a result under --results")
+    parser.add_argument("--experiments", nargs="+", default=None,
+                        help="which experiments to report, in page order. Default: "
+                             "every campaign the foil has a result for, which is "
+                             "what puts one foil's whole measurement history in one "
+                             "document: tungsten has 2000exp_5min, 1996exp_5min and "
+                             "1996exp_7hour, and the spread between them is a result")
     parser.add_argument("--libraries", nargs="+", default=None,
                         help="folders under --results, one per library. The first "
                              "is the primary one, whose absolute values the table "
@@ -1512,37 +1781,71 @@ def main():
                              "these 5 minute to 7 hour irradiations never reach "
                              "(default: 1)")
     parser.add_argument("--output", type=pathlib.Path, default=None,
-                        help="PDF to write (default: "
-                             "results/report_<case>_<experiment>.pdf)")
+                        help="PDF to write, which only makes sense for a single "
+                             "foil (default: results/report_<case>.pdf, or "
+                             "results/report_<case>_<experiment>.pdf when one "
+                             "experiment was named)")
     parser.add_argument("--title", default="YANI decay heat validation",
                         help="running header, top line")
     parser.add_argument("--subtitle", default="FNS benchmark, JAEA / IAEA CoNDERC",
                         help="running header, second line")
     args = parser.parse_args()
 
-    libraries = args.libraries or discover_libraries(args.case, args.experiments,
-                                                     args.results)
-    if not args.libraries:
-        print(f"libraries: {', '.join(libraries)}, primary {libraries[0]} "
-              f"(found under {args.results})")
+    cases = args.case or discover_cases(args.results)
+    if not cases:
+        raise SystemExit(
+            f"no results under {args.results}. Run:\n"
+            f"  python convert_to_arrow.py --case Fe\n"
+            f"  python run_transmutation.py --case Fe")
+    if args.output is not None and len(cases) > 1:
+        raise SystemExit(
+            f"--output names one file but {len(cases)} foils were selected "
+            f"({', '.join(cases)}). Name one foil with --case, or drop --output "
+            f"and they will be written as results/report_<case>.pdf.")
+    if args.case is None:
+        print(f"foils: {', '.join(cases)} (found under {args.results})")
 
-    chain = args.chain
-    if chain is None:
-        chain, from_library = discover_chain(libraries, args.data)
-        if chain is not None and from_library != libraries[0]:
-            print(f"chain: taken from {from_library}, which is not the primary "
-                  f"library. Its isomeric branching is {from_library}'s, not "
-                  f"{libraries[0]}'s")
+    for case in cases:
+        # One document per foil, carrying every campaign that foil was measured
+        # in. A foil measured more than once is one subject, and the spread
+        # between its campaigns is a result about the data rather than about any
+        # one measurement: iron reads 6% high against 2000exp_5min and 7% low
+        # against 1996exp_5min, which is only visible when they are bound
+        # together.
+        experiments = args.experiments or discover_experiments(case, args.results)
+        if not experiments:
+            print(f"{case}: no results under {args.results}, skipped")
+            continue
+        if args.experiments is None:
+            print(f"{case}: {', '.join(experiments)}")
 
-    stem = (args.experiments[0] if len(args.experiments) == 1
-            else f"{len(args.experiments)}experiments")
-    out = args.output or (args.results / f"report_{args.case}_{stem}.pdf")
-    written = build(args.case, args.experiments, libraries, args.results,
-                    chain, args.decay, args.pathway_depth, out, args.title,
-                    args.subtitle)
-    print()
-    for path in written:
-        print(f"{path.suffix.lstrip('.'):>6}: {path}")
+        libraries = args.libraries or discover_libraries(case, experiments,
+                                                         args.results)
+        if not args.libraries:
+            print(f"libraries: {', '.join(libraries)}, primary {libraries[0]} "
+                  f"(found under {args.results})")
+
+        chain = args.chain
+        if chain is None:
+            chain, from_library = discover_chain(libraries, args.data)
+            if chain is not None and from_library != libraries[0]:
+                print(f"chain: taken from {from_library}, which is not the primary "
+                      f"library. Its isomeric branching is {from_library}'s, not "
+                      f"{libraries[0]}'s")
+
+        # Named for the foil, because that is what the document is about. The
+        # experiment only reaches the filename when one was asked for by name,
+        # where it is the whole of what distinguishes the file.
+        stem = (f"{case}_{experiments[0]}" if args.experiments
+                and len(args.experiments) == 1 else case)
+        out = args.output or (args.results / f"report_{stem}.pdf")
+        written = build(case, experiments, libraries, args.results,
+                        chain, args.decay, args.pathway_depth, out, args.title,
+                        args.subtitle)
+        print()
+        for path in written:
+            print(f"{path.suffix.lstrip('.'):>6}: {path}")
+        print()
 
 
 if __name__ == "__main__":

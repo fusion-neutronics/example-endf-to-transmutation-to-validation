@@ -14,7 +14,9 @@ The whole chain is three steps.
 3. **Validation.** yani irradiates a 1 g foil with the measured neutron
    spectrum from the JAEA FNS decay-heat experiment, follows the activation
    products through the cooling schedule, and the specific decay heat is
-   plotted against the measurement.
+   plotted against the measurement, with an uncertainty band on each: the
+   experiment's own, and the one the cross-section covariance puts on the
+   calculation.
 
 It defaults to iron, and `--case` takes any of the 73 FNS foils.
 
@@ -140,7 +142,8 @@ are written to disk. Conversion runs about twenty seconds per isotope, and each
 run reconverts the isotopes for the selected foil.
 
 `run_transmutation.py` writes `results/<source>/fns_<case>_<experiment>.png` and
-a JSON of the same numbers, including the per-nuclide breakdown of the heat.
+a JSON of the same numbers, including the per-nuclide breakdown of the heat and
+the nuclear-data sigma on both.
 
 When step 1 uses `--endf-dir`, the `<source>` name defaults to that directory's
 basename. For example, this pair matches:
@@ -189,24 +192,50 @@ difference smaller than that foil's measurement sigma is called a tie, because
 most of these foils agree within it and a difference below sigma is not a
 result.
 
+The tie threshold is the measurement's sigma alone, which is now the narrower of
+the two available. `sweep_fns.py` carries a `data sigma` column per foil, the
+median nuclear-data uncertainty on that foil's calculated heat, and on several
+foils it is the larger number: a 6% difference between two libraries on a foil
+whose cross sections are each known to 6% is not a result either. Folding it in
+would need a view on how correlated two evaluations of the same physics are,
+which is a real question and not one this repo answers, so the threshold is left
+where the published comparisons put it and the second sigma is printed beside it
+to be read.
+
 ### A report PDF
 
 ```bash
-python make_report.py --case W
+python make_report.py            # one document per foil, all of its campaigns
+python make_report.py --case W   # just this one
 ```
 
-Binds the per-foil JSON into `results/report_<case>_<experiment>.pdf`: the foil
-named, then the C/E table with an E/C column per library and, under it, the
-nuclide E/C analysis and that library's heat curve; then the production
-pathways, over as many pages as they need; then the heat curves with their
-percentage contributions. Nothing is recomputed: step 2 already wrote the full
-per-nuclide breakdown, so a report is cheap to regenerate and cannot disagree
-with the run it came from.
+Binds the per-foil JSON into `results/report_<case>.pdf`: the foil named, then
+the C/E table with an E/C column per library and, under it, the nuclide E/C
+analysis and that library's heat curve; then the production pathways, over as
+many pages as they need; then the heat curves with their percentage
+contributions. Nothing is recomputed: step 2 already wrote the full per-nuclide
+breakdown and the sigma on it, so a report is cheap to regenerate and cannot
+disagree with the run it came from.
 
-Which libraries to report and which chain to read them against are worked out
-from what is on disk, which is why the line above takes no arguments beyond the
-foil. Both can still be given, and `--libraries` is also how to say which
-library is the primary one, whose absolute values the table carries:
+**One document per foil, covering every campaign it was measured in.** The last
+three pages repeat per campaign. A foil measured more than once is still one
+subject, and the spread between its campaigns is a result about the data rather
+than about any one measurement, so binding them separately hides it. Tungsten's
+three campaigns run 122%, 65% and 20% out, all against the same cross sections;
+iron reads 6% high on `2000exp_5min` and 7% low on `1996exp_5min`.
+
+With no arguments it writes one for every foil that has a result. Which foils,
+which campaigns, which libraries and which chain are all read off what is on
+disk. `--case` picks foils, `--experiments` picks campaigns, and naming exactly
+one campaign puts it back in the filename as `report_<case>_<experiment>.pdf`.
+
+Every column the published reports carry is now on the page, `+/- 6%` and
+`%ΔCnuc` included. A result filed before those existed is still readable: the
+two uncertainty columns are left empty rather than filled with a zero, which
+would be a different claim.
+
+`--libraries` is also how to say which library is the primary one, whose
+absolute values the table carries:
 
 ```bash
 python make_report.py --case W --libraries tendl-2025 tendl-2017 \
@@ -214,16 +243,18 @@ python make_report.py --case W --libraries tendl-2025 tendl-2017 \
 ```
 
 Beside the PDF go the same tables in a form something else can read:
-`report_<case>_<experiment>.json`, which carries every table with none of the
-page's caps applied, and `report_<case>_<experiment>_ce.csv`, which carries the
-C/E table alone. A PDF is where this report is read and a poor place to get a
-number back out of.
+`report_<case>.json`, which carries every table for every campaign with none of
+the page's caps applied, and `report_<case>_ce.csv`, which carries the C/E
+tables alone, one row per campaign per cooling point. A PDF is where this report
+is read and a poor place to get a number back out of.
 
 The table's two figures of merit are the published ones, the mean of
 `|C/E - 1|` and a mean chi-squared against the measurement's own sigma, which is
 what says whether a deviation is larger than the experiment can resolve. On
 W/2000exp_5min against TENDL-2025 they come out at 122.0% and 105.14, against
-122 and 105.24 in the UKAEA decay heat validation report.
+122 and 105.24 in the UKAEA decay heat validation report. Neither carries the
+calculation's own uncertainty, because neither does in the published definition;
+that number is in the column beside the value it belongs to instead.
 
 `--chain` is optional and only the pathway page depends on it, but prefer the
 library's own chain over a generic one: the isomeric branching that step 1
@@ -279,12 +310,50 @@ does not come apart by nuclide. What makes the row worth reading is the share
 beside it: an E/C of 0.51 at a point where one product is 98% of the
 calculation is a statement about that product.
 
-One column of that table is still left empty rather than estimated, `%ΔCnuc`,
-and with it the `+/- 6%` the published reports print on the calculated value.
-Both need cross-section covariance carried through the inventory. It is not
-reachable from this repo: yani does not propagate covariance, and the NJOY deck
-that would have to ask for it is written inside `yani.convert_neutron_xs`
-rather than here.
+### The uncertainty on the calculated value
+
+The last column of that table, `%ΔCnuc`, and the `+/- 6%` the published reports
+print beside every calculated µW/g, are both cross-section covariance carried
+through the inventory. Neither was reachable until yani 0.11.1 and both are now
+filled.
+
+Step 1 writes the MF=33 covariance as a `covariance.arrow` beside each nuclide.
+That is on by default, because it is nearly free: on W186 it costs no measurable
+NJOY time and 78 kB against a 2.0 MB nuclide. Step 2 then resamples the
+activation cross sections from it, folds each draw against the foil's own
+spectrum and re-solves the schedule, and the spread over that ensemble is the
+number. The solver is untouched and only its input moves, so the mean inventory
+is what it always was: `--no-uncertainty` reproduces the old bare value exactly,
+and the whole ensemble costs about a second.
+
+On W/2000exp_5min against TENDL-2025 the calculated heat comes out good to 5.5%
+in the median, 4.2% to 6.2% over the cooling points, against the `+/- 6%` falling
+to `+/- 4%` the published table carries for the same foil. `%ΔCnuc` on W185m
+comes out at 6%, which is what the report prints.
+
+Two things about that number are worth knowing before it is used.
+
+It is the **activation cross sections and nothing else**. Half-lives, decay
+branching ratios, fission yields and the isomeric-branching overlay are held at
+their evaluated values, and the flux is taken as exact because nothing is
+transported. Step 2 prints what it did not propagate rather than leaving that to
+be assumed.
+
+A **sigma of zero is not a claim of certainty**. An evaluation that states no
+MF=33 is perturbed by nothing and its products come back exact, which on the
+page is indistinguishable from a product that is well determined. yani counts
+those nuclides, step 2 names them, and the report page prints a note under the
+table rather than letting the column read as coverage it does not have. The
+tables also print `<1%` rather than `0%` for a small non-zero spread, so that
+`0%` is never the answer to two different questions.
+
+The total is taken over **whole inventories** rather than assembled from
+per-nuclide sigmas. Decay heat is a function of an inventory, and a parent and
+its daughter move together under one resampled cross section, so adding
+per-nuclide sigmas in quadrature would assume an independence the resampling
+exists precisely to avoid assuming. `%ΔCnuc` is the narrower thing: one
+product's own spread, which is what says whether the row beside it is inside
+what that product's cross sections can account for.
 
 ## What comes out
 
@@ -301,6 +370,37 @@ The breakdown says why the shape is what it is. Mn56 from Fe56(n,p), half-life
 rest of the early heat is Mn57 and Fe53, both of which are gone within minutes,
 so the first few points test three cross sections and the tail tests one.
 
+### What the sigma is a statement about
+
+The uncertainty on the calculated value is the library's own account of itself,
+not a property of the calculation, and iron is the case that makes that
+unmissable. The same foil, the same spectrum, the same solver:
+
+| library | median C/E | mean deviation | data sigma | isotopes with MF=33 |
+|---|---|---|---|---|
+| tendl-2025 | 1.064 | 6.0% | **33%** | 4 of 4 |
+| endf-b8.1 | 1.057 | 4.9% | **1.2%** | 2 of 4 |
+
+Both track the measurement to within about 5%, and the two numbers beside that
+differ by a factor of 27. Nothing in the transport, the chain or the solver
+accounts for it: it is what the two evaluations state about their own Fe56(n,p),
+which carries most of this foil's heat. TENDL's covariances come from varying
+TALYS parameters and are wide; ENDF/B-VIII.1's Fe56 is one of the most measured
+cross sections there is and its covariance is correspondingly tight.
+
+Neither number is wrong, and the second is the one to be careful with. Part of
+that 1.2% is Fe57 and Fe58 carrying no MF=33 at all, so their reactions were
+perturbed by nothing and came back exact. That is a gap and not a measurement,
+which is why the report prints it under the table rather than letting a small
+sigma read as a well-determined one. Read the two columns together: a 6%
+deviation against a 33% sigma is a foil this library cannot resolve, and the
+same 6% against a genuine 1.2% would be a real disagreement.
+
+Tungsten is the other end of it. Against TENDL-2025 the calculated heat is good
+to 5.5% in the median while sitting 122% from the measurement, which is a
+disagreement no account of the cross-section uncertainty absorbs, and the
+pathway page says where it lives.
+
 Swapping the cross sections for ENDF/B-8.1, with everything else held fixed,
 turns this into a library comparison:
 
@@ -312,8 +412,8 @@ python run_transmutation.py --cross-sections data/b81 --output results/b81
 
 ### What else comes out of the same evaluations
 
-`convert_to_arrow.py` writes three things, not one. The cross sections, and two
-subsections under `data/chain/`:
+`convert_to_arrow.py` writes four things, not one. The cross sections, a
+`covariance.arrow` beside each of them, and two subsections under `data/chain/`:
 
 * `branching/`, which decides how much of an (n,2n) leaves the product in its
   metastable state rather than its ground state. That fraction is energy
@@ -323,8 +423,18 @@ subsections under `data/chain/`:
   product, and the Q value of each. An evaluation states this outright, in the
   MT numbers it carries. TENDL-2025 gives Fe56 25 reaction channels where the
   endf-b8.1 chain gives 5, and W184 27 against 9.
+* `covariance.arrow`, the MF=33 cross-section covariance, which is what puts the
+  `+/- 6%` on the calculated decay heat. `--no-covariance` leaves it out; there
+  is not much reason to, since it costs no measurable NJOY time and 4% more
+  disk. An evaluation that carries no MF=33 writes none, and step 1 says which.
 
-Both matter for the same reason: every part of the answer that comes from
+  It has to come from the ENDF, so an Arrow directory converted before yani
+  0.11.0 does not have it and cannot be given it without rerunning NJOY. Step 2
+  against one of those does not fail and does not report zero: it says no
+  covariance was available and names the reconversion, and the report leaves
+  both columns empty.
+
+The first two matter for the same reason: every part of the answer that comes from
 somewhere other than the library under test makes the C/E harder to read. Mean
 deviation against the measurement on `2000exp_5min`, moving one subsection at a
 time off endf-b8.1 and onto the library the cross sections came from:

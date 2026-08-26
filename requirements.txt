@@ -15,7 +15,7 @@ njoy2016
 # `PIL`). Wheels are published for Linux x86_64, Windows x64 and macOS arm64,
 # abi3 from Python 3.10 up, so there is nothing to build.
 #
-# The floor buys three things, all of them load-bearing here:
+# The floor buys five things, all of them load-bearing here:
 #
 #   * `TransmutationChain.decays` (0.8), so make_report.py can follow a
 #     production route past its neutron reaction. Without it a route stops at
@@ -27,10 +27,22 @@ njoy2016
 #     'step_materials'`, minutes in, after NJOY has already done its work.
 #   * `TransmutationResults.get_reaction_rates` (0.9.0), the per-edge rates the
 #     Path % column is computed from.
+#   * `convert_neutron_xs(covariance=True)` (0.11.0), which writes the MF=33
+#     cross-section covariance beside each nuclide. Older wheels take no such
+#     argument and raise on it, in step 1, before any NJOY time is spent.
+#   * `DataUncertainty` and `TransmutationResults.get_uncertainty_inventories`
+#     (0.11.0), which resample the activation cross sections from that
+#     covariance and hand back every replica's inventory. That is the
+#     "+/- 6%" on the calculated column and the %dCnuc beside it, the last two
+#     columns of the published tables this example could not fill.
+#
+# 0.11.1 rather than 0.11.0 because that is the release `yani` pins its
+# `yani-core` wheel to; the two move together and there is nothing to gain from
+# a floor that admits a combination nobody has run.
 #
 # A floor turns each of those into an unsatisfiable requirement pip reports up
 # front, rather than an AttributeError partway through a run.
-yani>=0.9.0
+yani>=0.11.1
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no

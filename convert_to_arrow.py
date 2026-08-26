@@ -40,6 +40,14 @@ nuclides exist, so the first run fetches the ENDF/B-8.1 decay sublibrary.
 ``--decay-dir`` uses a copy you already have. ``--no-branching`` skips the
 branching, at the cost of being wrong by up to 6x on foils whose decay heat
 comes from an isomer, and ``--no-reactions`` leaves the topology on endf-b8.1.
+
+A fourth thing comes out of the same evaluations: the MF=33 cross-section
+covariance, written as ``covariance.arrow`` beside each nuclide. That is what
+puts an uncertainty on the calculated decay heat, which the published reports
+print and this example could not until yani-core 0.11.0 read it. It is on by
+default because it is close to free: on W186 it costs no measurable NJOY time
+and 78 kB against a 2.0 MB nuclide. ``--no-covariance`` leaves it out, and
+step 2 then reports a bare value as it used to.
 """
 
 import argparse
@@ -401,6 +409,10 @@ def main():
                         help="skip the isomeric branching subsection")
     parser.add_argument("--no-reactions", action="store_true",
                         help="skip the reaction topology subsection")
+    parser.add_argument("--no-covariance", action="store_true",
+                        help="skip the MF=33 cross-section covariance, which is "
+                             "what run_transmutation.py puts an uncertainty on "
+                             "the calculated decay heat from")
     parser.add_argument("--source", default=None,
                         help="folder name to file this run's data and results under "
                              "(default: the library name, or the --endf-dir directory name)")
@@ -450,6 +462,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"LIB:   stamping the output as {args.library!r}")
 
+    uncovered = []
     for name, abundance in wanted.items():
         target = out_dir / f"{name}.arrow"
         print(f"{name}: NJOY at {args.temperature:g} K "
@@ -462,9 +475,31 @@ def main():
             temperatures=[args.temperature],
             library=args.library,
             njoy_exec=args.njoy,
+            # The MF=33 covariance, which step 2 resamples the activation cross
+            # sections from to put a sigma on the decay heat. On by default
+            # because the evaluation is being read anyway: no measurable NJOY
+            # time, and 78 kB against a 2.0 MB nuclide on W186. An evaluation
+            # that carries no MF=33 is not an error, and step 2 names it.
+            covariance=not args.no_covariance,
         )
         size = sum(f.stat().st_size for f in target.rglob("*")) / 1e6
-        print(f"{name}: {time.perf_counter() - start:.0f} s, {size:.1f} MB -> {target}")
+        # An evaluation that states no MF=33 writes no covariance.arrow. That is
+        # a property of the evaluation, not a failure, but it is the reason a
+        # sigma can come back at zero later, so it is named here rather than
+        # left to be discovered as a suspiciously confident number in step 2.
+        covariance = (target / "covariance.arrow").is_file()
+        if not args.no_covariance and not covariance:
+            uncovered.append(name)
+        note = "" if args.no_covariance else (
+            ", covariance" if covariance else ", no MF=33 covariance in the evaluation")
+        print(f"{name}: {time.perf_counter() - start:.0f} s, {size:.1f} MB{note} -> {target}")
+
+    if args.no_covariance:
+        print("\nCOV:   skipped, so step 2 reports the decay heat without a sigma")
+    elif uncovered:
+        print(f"\nCOV:   {len(wanted) - len(uncovered)}/{len(wanted)} isotopes carry "
+              f"MF=33; {' '.join(uncovered)} do not, so their reactions are held at "
+              f"their evaluated values and contribute no sigma")
 
     if args.no_branching and args.no_reactions:
         print("\nCHAIN: skipped, so isomer-dominated foils (Nb, Ag, W) will be wrong")
