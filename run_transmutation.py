@@ -438,11 +438,18 @@ def plot(case, calculated, breakdown, ratio, metrics, out_dir, sigma=None):
 
     top.set_ylabel("specific decay heat [uW/g]")
     top.set_yscale("log")
-    # Short-lived contributors fall away by orders of magnitude; without a floor
-    # they stretch the axis until the total and the measurement are one line.
-    positive = calculated[calculated > 0]
-    if positive.size:
-        top.set_ylim(bottom=positive.min() / 300.0, top=positive.max() * 3.0)
+    # Scaled to the two series being compared, the calculation and the
+    # measurement, so that the comparison fills the panel. Short-lived
+    # contributors fall away by orders of magnitude, and letting them set the
+    # floor stretches the axis until the total and the measurement are one line.
+    # They clip instead; the JSON carries every one of them at every step.
+    edges = np.concatenate([calculated, measured, measured - uncertainty,
+                            measured + uncertainty]
+                           + ([calculated - sigma, calculated + sigma]
+                              if sigma is not None else []))
+    edges = edges[np.isfinite(edges) & (edges > 0)]
+    if edges.size:
+        top.set_ylim(bottom=edges.min() / 2.0, top=edges.max() * 2.0)
     # The agreement goes on the figure, not just on stdout, so a directory of
     # these can be read side by side. The measurement's own scatter sits next to
     # the deviation because it says whether that deviation means anything.
