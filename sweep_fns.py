@@ -56,6 +56,30 @@ def run_case(case, experiment, results, converter_args, runner_args):
     return json.loads(written.read_text())
 
 
+def data_sigma(summary):
+    """The median nuclear-data sigma on the calculated heat, as a percent, or None.
+
+    Beside the measurement's own sigma this is what says whether a foil's
+    deviation is a result. A 10% deviation on a foil whose cross sections are
+    known to 3% is a disagreement; the same 10% on one known to 25% is not, and
+    the sweep table cannot rank foils honestly without both numbers.
+
+    ``None`` for a foil run with ``--no-uncertainty``, or against cross sections
+    converted without the covariance.
+    """
+    sigma = summary.get("yani_uncertainty_uW_per_g")
+    if sigma is None:
+        return None
+    calculated = summary["yani_uW_per_g"]
+    relative = [100.0 * s / c for s, c in zip(sigma, calculated) if c > 0]
+    if not relative:
+        return None
+    relative.sort()
+    middle = len(relative) // 2
+    return (relative[middle] if len(relative) % 2
+            else 0.5 * (relative[middle - 1] + relative[middle]))
+
+
 def dominant(summary):
     """The nuclide carrying most of the heat at the first measured point."""
     contributions = summary["by_nuclide_uW_per_g"][0]
@@ -69,14 +93,17 @@ def dominant(summary):
 def table(rows, library, experiment):
     """The sweep as markdown, worst agreement last."""
     lines = [
-        f"| foil | median C/E | mean deviation | measurement sigma | dominant product |",
-        "|---|---|---|---|---|",
+        "| foil | median C/E | mean deviation | measurement sigma | data sigma "
+        "| dominant product |",
+        "|---|---|---|---|---|---|",
     ]
     for row in sorted(rows, key=lambda r: r["mean_deviation_percent"]):
+        sigma = row["median_data_sigma_percent"]
         lines.append(
             f"| {row['case']} | {row['median_ratio']:.3f} | "
             f"{row['mean_deviation_percent']:.1f}% | "
             f"{row['median_measurement_sigma_percent']:.1f}% | "
+            f"{'-' if sigma is None else f'{sigma:.1f}%'} | "
             f"{row['dominant']} {row['dominant_percent']:.0f}% |"
         )
     return (f"# FNS decay heat, {library} on {experiment}\n\n"
@@ -161,16 +188,20 @@ def main():
             failed.append(case)
             continue
         nuclide, percent = dominant(summary)
+        sigma = data_sigma(summary)
         rows.append({
             "case": case,
             "median_ratio": summary["median_ratio"],
             "mean_deviation_percent": summary["mean_deviation_percent"],
             "median_measurement_sigma_percent": summary["median_measurement_sigma_percent"],
+            "median_data_sigma_percent": sigma,
             "dominant": nuclide,
             "dominant_percent": percent,
         })
         print(f"  C/E {summary['median_ratio']:.3f}, "
-              f"{summary['mean_deviation_percent']:.1f}% deviation, {nuclide} {percent:.0f}%",
+              f"{summary['mean_deviation_percent']:.1f}% deviation"
+              f"{'' if sigma is None else f' against {sigma:.1f}% data sigma'}, "
+              f"{nuclide} {percent:.0f}%",
               flush=True)
 
     (args.output / "sweep.json").write_text(json.dumps(
