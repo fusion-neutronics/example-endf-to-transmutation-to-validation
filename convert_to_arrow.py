@@ -123,9 +123,16 @@ def identify(path, lines=8):
     Reads the MF=1 MT=451 descriptive section that every ENDF evaluation opens
     with. The name comes from its ZSYMAM field rather than from ZA, so no
     periodic table is needed here, and the isomeric state comes from LIS0 in
-    the second record. Metastable evaluations return None: they are separate
-    evaluations of the same ZA and are not part of a natural composition. Only
-    the first few lines are read, so scanning thousands of files stays cheap.
+    the second record. A metastable evaluation is named for the state it is,
+    "Ta180_m1" rather than "Ta180", so it can neither be mistaken for the
+    ground state nor collide with it. Only the first few lines are read, so
+    scanning thousands of files stays cheap.
+
+    Naming them rather than discarding them is what makes tantalum convertible.
+    Natural Ta is 0.012% Ta180m and 99.988% Ta181, so Ta180_m1 is a target in
+    its own right, and a scanner that drops every metastable file has no way to
+    supply it: the one foil in the 73 whose natural composition includes an
+    isomer failed here with "no evaluation for Ta180_m1".
     """
     try:
         with open(path, "r", errors="replace") as handle:
@@ -139,9 +146,7 @@ def identify(path, lines=8):
         try:
             za = int(round(endf_float(line[_FIELD[0]])))
             # Second record, fourth field: LIS0, which is 0 for a ground state.
-            state = head[index + 1][_FIELD[3]].strip()
-            if int(state or 0) != 0:
-                return None
+            state = int(head[index + 1][_FIELD[3]].strip() or 0)
             match = _ZSYMAM_RE.match(head[index + _ZSYMAM][_FIELD[0]])
         except (ValueError, IndexError):
             return None
@@ -151,7 +156,7 @@ def identify(path, lines=8):
         # ZSYMAM is free text, so check it against the header's own ZA.
         if z * 1000 + mass != za:
             return None
-        return f"{symbol}{mass}"
+        return f"{symbol}{mass}" + (f"_m{state}" if state else "")
     return None
 
 
@@ -185,11 +190,28 @@ def scan(endf_dir, wanted):
     return found
 
 
+def split_nuclide(nuclide):
+    """"Ta180_m1" -> ("Ta", 180, "1"), and "Fe56" -> ("Fe", 56, "").
+
+    One place that knows how a nuclide name comes apart, because stripping the
+    digits off "Ta180_m1" leaves "Ta180_m" rather than the element, and every
+    caller that wants the symbol would otherwise have to remember that.
+    """
+    base, _, state = nuclide.partition("_m")
+    symbol = base.rstrip("0123456789")
+    return symbol, int(base[len(symbol):]), state
+
+
 def tendl_name(nuclide):
-    """"Fe56" -> "n-Fe056.tendl", TENDL's own file naming."""
-    symbol = nuclide.rstrip("0123456789")
-    mass = int(nuclide[len(symbol):])
-    return f"n-{symbol}{mass:03d}.tendl"
+    """"Fe56" -> "n-Fe056.tendl", TENDL's own file naming.
+
+    An isomer keeps its state on the end, as TENDL writes it: "Ta180_m1" ->
+    "n-Ta180m.tendl". Asking for the ground state under the isomer's name would
+    quietly convert the wrong evaluation.
+    """
+    symbol, mass, state = split_nuclide(nuclide)
+    suffix = "m" * bool(state) + (state if state not in ("", "1") else "")
+    return f"n-{symbol}{mass:03d}{suffix}.tendl"
 
 
 def fetch_tendl(tarball, work_dir, nuclides, library):
@@ -466,7 +488,7 @@ def main():
     for name, abundance in wanted.items():
         target = out_dir / f"{name}.arrow"
         print(f"{name}: NJOY at {args.temperature:g} K "
-              f"({abundance:.4g}% of natural {name.rstrip('0123456789')}) ...", flush=True)
+              f"({abundance:.4g}% of natural {split_nuclide(name)[0]}) ...", flush=True)
         start = time.perf_counter()
         yani.convert_neutron_xs(
             input_path=str(sources[name]),
