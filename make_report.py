@@ -9,6 +9,9 @@ UKAEA decay-heat validation reports use:
     make_report.py --case W        # just this one
 
     cover page               the foil, named, and one line per campaign
+    library comparison       every library's total against the measurement, one
+                             panel per campaign, each curve carrying its own
+                             cross-section uncertainty band
     C/E table                one row per cooling point, one E/C column per
                              library, the nuclide E/C analysis under it saying
                              which product carries the disagreement, and that
@@ -17,7 +20,9 @@ UKAEA decay-heat validation reports use:
                              product, over as many pages as they need
     figure page              heat curves and % contributions, one row per library
 
-The last three repeat per campaign, because one foil is one document. A foil
+The last three repeat per campaign; the comparison page carries all of them at
+once, so the campaigns can be read against each other. One foil is one
+document, and that is the point of binding it this way. A foil
 measured more than once is still one subject, and the spread between its
 campaigns is a result about the data rather than about any one measurement:
 iron reads 6% high against ``2000exp_5min`` and 7% low against
@@ -137,6 +142,26 @@ PANEL_ASPECT_MAX = 1.15
 # curve is not jammed against the frame and little enough that it is still the
 # data setting the scale.
 PANEL_HEADROOM = 2.0
+
+# How solid the +/- 1 sigma band around a calculated curve is drawn. Light
+# enough that four of them can overlap on the comparison panel and the curves
+# stay readable through them, dark enough that a band is visibly a band and not
+# a rendering artefact. The bands routinely do overlap: that they do is the
+# point, since two libraries whose bands intersect do not disagree.
+BAND_ALPHA = 0.18
+
+# The share of the driven production rate a library's covariance has to span
+# before its sigma is left to speak for itself. Below this the page says so
+# under the table, because the number is then a spread over part of the answer
+# and reads as a spread over all of it. Set just under 1 rather than at some
+# round fraction: anything that leaves a tenth of the production unperturbed is
+# worth a sentence, and the case this exists for spans 5%.
+COVERAGE_FLOOR = 0.9
+
+# Room below a panel's axes box for its tick labels and x label, as a fraction
+# of the page. matplotlib places both outside the box, so anything laid out
+# against the box's own bottom edge sits on top of them.
+XLABEL_CLEAR = 0.042
 
 # The least height, as a fraction of the page, worth giving the heat curve that
 # sits under the C/E table. What the tables leave is not fixed: a foil with 20
@@ -603,6 +628,35 @@ def uncertainty_percent(result):
                              where=calculated > 0)
 
 
+def rate_coverage(result):
+    """Share of the production this solve drove that carries a stated sigma.
+
+    Counting nuclides with MF=33 answers the wrong question. ENDF/B-VIII.1 and
+    JEFF-4.0 both state covariance for all five natural tungsten isotopes, and
+    what they state it for is ``(n,3n)`` and ``(n,gamma)``; the
+    ``W186(n,2n)W185m`` carrying 98% of the foil's decay heat has none. The
+    ensemble then perturbs 4.8% of the production and reports 0.02% on the
+    total, which without this line is the most confident figure in the table.
+
+    Weighted by the rates the solve itself computed, so it is a statement about
+    this irradiation rather than about the evaluation in the abstract: a channel
+    with no covariance costs nothing if nothing went through it.
+
+    Returns a fraction in [0, 1], or None when the result carries no rates or no
+    uncertainty to qualify.
+    """
+    info = result.get("data_uncertainty_info")
+    edges = result.get("edge_rates")
+    if not info or not edges or uncertainty_of(result) is None:
+        return None
+    covered = info.get("rate_fraction_covered") or {}
+    total = sum(rate for _p, _k, _t, rate in edges)
+    if not total:
+        return None
+    return sum(rate * covered.get(f"{parent} {kind}", 0.0)
+               for parent, kind, _target, rate in edges) / total
+
+
 def coverage_note(result):
     """What the sigma on this page left out, or None if it left nothing out.
 
@@ -622,6 +676,17 @@ def coverage_note(result):
         return None
 
     parts = []
+
+    # First, because it is the one that decides whether the rest of the sigma
+    # is worth reading at all. A library can carry MF=33 for every isotope in
+    # the foil and still state nothing about the channel that makes the heat.
+    fraction = rate_coverage(result)
+    if fraction is not None and fraction < COVERAGE_FLOOR:
+        parts.append(f"The covariance spans {fraction * 100:.0f}% of the "
+                     f"production rate this irradiation drove, so the +/- above "
+                     f"is a spread over that part and not over the answer; the "
+                     f"channels carrying the rest are perturbed by nothing.")
+
     missing = info.get("no_covariance_data") or []
     if missing:
         parts.append(f"No MF=33 covariance for {', '.join(sorted(missing))}: "
@@ -746,8 +811,14 @@ def discover_libraries(case, experiments, results_root):
     return found
 
 
-def discover_chain(libraries, data_root):
+def discover_chain(libraries, data_root, case):
     """The chain convert_to_arrow.py wrote beside one of these libraries' cross sections.
+
+    Named for the foil as well as the library, because a chain is scoped to one
+    foil's isotopes: ``data/tendl-2025/chain-W`` is not a chain that can answer
+    anything about iron. A shared path made converting the second foil quietly
+    replace the first foil's chain, which left this page walking routes from
+    tungsten through a topology built for Fe54 Fe56 Fe57 Fe58 and finding none.
 
     The primary library's own is preferred, and that is not a nicety: its
     ``branching/`` is the energy-dependent overlay, and without it the dominant
@@ -762,7 +833,7 @@ def discover_chain(libraries, data_root):
     page is not about is exactly the kind of thing that should be said out loud.
     """
     for library in libraries:
-        chain = data_root / library / "chain"
+        chain = data_root / library / f"chain-{case}"
         if chain.is_dir():
             return chain, library
     return None, None
@@ -1038,7 +1109,7 @@ def cover_page(pdf, case, sections, title, subtitle, number, total):
     figure.text(0.5, 0.70, element_name(case), ha="center", fontsize=26)
     figure.text(0.5, 0.655, "FNS decay heat validation", ha="center", fontsize=11)
 
-    libraries = ", ".join(lib for lib, _ in sections[0][1])
+    libraries = ", ".join(library_label(lib) for lib, _ in sections[0][1])
     figure.text(0.5, 0.625, f"libraries: {libraries}", ha="center", fontsize=9,
                 color="#555555")
 
@@ -1089,8 +1160,8 @@ def table_page(pdf, case, results, half_lives, title, subtitle, number, total):
                ("FNS Exp.", "µW/g", "r", 1.5),
                ("", "µW/g", "r", 1.5 if uncertainty_of(primary) is not None else 1.1),
                ("", "E/C", "r", 0.8)]
-    columns += [(name[:12], "E/C", "r", 0.8) for name, _ in scores[1:]]
-    spans = [(primary_name[:20], 2, 3)]
+    columns += [(library_label(name)[:12], "E/C", "r", 0.8) for name, _ in scores[1:]]
+    spans = [(library_label(primary_name)[:20], 2, 3)]
 
     # The calculated column carries its own uncertainty when the run produced
     # one, which is what makes the E/C beside it readable: a ratio of 0.39 is a
@@ -1131,7 +1202,7 @@ def table_page(pdf, case, results, half_lives, title, subtitle, number, total):
     products = leading_products(primary)
     analysis = nuclide_analysis(primary, half_lives)
     figure.text(0.08, bottom - 0.022,
-                f"{primary_name} nuclide E/C analysis", fontsize=10)
+                f"{library_label(primary_name)} nuclide E/C analysis", fontsize=10)
     product_columns = [("Product", "", "l", 1.1),
                        ("T1/2", "", "r", 0.7),
                        ("share of C", "", "r", 0.9),
@@ -1389,7 +1460,7 @@ def pathway_page(pdf, case, primary_name, layout, index, title, subtitle,
                  number, total):
     """One page of "how each product that carries heat is made"."""
     figure = page(pdf, title, subtitle, number, total)
-    heading = f"{element_name(case)}, {primary_name} production pathways"
+    heading = f"{element_name(case)}, {library_label(primary_name)} production pathways"
     if len(layout["pages"]) > 1:
         heading += f" ({index + 1} of {len(layout['pages'])})"
     figure.text(0.08, 0.905, heading, fontsize=11)
@@ -1438,6 +1509,56 @@ def product_colours(products):
     return [palette(index % palette.N) for index in range(len(products))]
 
 
+def library_label(library):
+    """A library's folder name as it should be printed: ``TENDL-2025``.
+
+    These are acronyms, and every published table writes them in capitals. On
+    disk they are lowercase because they are directory names, so the two are
+    kept apart rather than reconciled: uppercasing here means nothing on disk,
+    in the JSON, in the CSV or in ``--libraries`` has to change, and the folder
+    a number came from is still the name the page shows.
+
+    ``upper()`` rather than ``title()``, which would give ``Tendl-2025``: the
+    letters are an acronym rather than a word, and it is the whole acronym that
+    is capitalised. It happens to be right for the release part too, since
+    ``endf-b8.1`` wants ``ENDF-B8.1`` and the digits are unaffected.
+    """
+    return library.upper()
+
+
+def library_colours(libraries):
+    """One colour per library, keyed by name so it is the same on every page.
+
+    Keyed rather than positional because the comparison panel and the figure
+    page do not always carry the same libraries in the same order: a library
+    with no result for one campaign is dropped from that section only, and a
+    colour that shifted along when it did would make the two pages disagree
+    about which curve is which.
+    """
+    palette = plt.get_cmap("tab10")
+    return {name: palette(index % palette.N)
+            for index, name in enumerate(libraries)}
+
+
+def draw_band(axes, times, values, sigma, colour):
+    """The +/- 1 sigma nuclear-data band around a calculated curve.
+
+    Clipped at the bottom to a floor rather than allowed to reach zero, because
+    these panels are logarithmic and a lower edge at or below zero has no place
+    on them: matplotlib drops the whole polygon and the band silently vanishes
+    at exactly the points where it is widest. The floor is a thousandth of the
+    value, which is far enough below the curve to read as "the band runs off the
+    bottom here" and cannot be mistaken for a bound.
+
+    A sigma wider than the value itself is not a drawing problem to be hidden:
+    it means the cross sections admit an answer near zero, which is a real thing
+    for a product made down one poorly known channel.
+    """
+    lower = np.maximum(values - sigma, values * 1e-3)
+    axes.fill_between(times, lower, values + sigma, color=colour,
+                      alpha=BAND_ALPHA, linewidth=0, zorder=1)
+
+
 def heat_limits(values, headroom=PANEL_HEADROOM):
     """Y limits covering the total and the measurement, and deliberately nothing else.
 
@@ -1480,6 +1601,14 @@ def draw_heat(axes, case, library, result, values, products, colours, fontsize=6
     for index, (nuclide, _share, _at) in enumerate(products):
         axes.plot(times, series_of(result, nuclide), "--", linewidth=0.7,
                   color=colours[index], label=nuclide)
+    # The band belongs on the total and on nothing else here. The per-product
+    # curves have sigmas too, in the JSON, but drawing thirteen overlapping
+    # bands would bury the one comparison the panel is for, and the products'
+    # own spreads are already the %dCnuc column on the table page.
+    spread = uncertainty_of(result)
+    if spread is not None:
+        draw_band(axes, times, np.asarray(values["calculated"], dtype=float),
+                  spread, "black")
     axes.plot(times, values["calculated"], "-", color="black", linewidth=1.2,
               label="Total", zorder=2)
     axes.set_xscale("log")
@@ -1489,9 +1618,132 @@ def draw_heat(axes, case, library, result, values, products, colours, fontsize=6
         axes.set_ylim(*limits)
     axes.set_xlabel(f"Time after irradiation [{result['time_unit']}]", fontsize=fontsize)
     axes.set_ylabel("Heat Output [µW/g]", fontsize=fontsize)
-    axes.set_title(f"FNS {result['experiment']} - {case} - {library}",
+    axes.set_title(f"FNS {result['experiment']} - {case} - {library_label(library)}",
                    fontsize=fontsize + 1.0)
     _finish_panel(axes, fontsize)
+
+
+def draw_comparison(axes, case, results, colours, fontsize=6.5):
+    """Every library's total against the measurement, on one axes.
+
+    The published reports open each foil with this panel, and it is the one
+    figure that answers the question the whole document is about: not "is this
+    library right" but "do the libraries agree, and is the measurement inside
+    them". Four totals drawn separately, one per page, cannot be read against
+    each other; drawn together the spread between the evaluations is a distance
+    on the page.
+
+    Each total carries its own +/- 1 sigma nuclear-data band, which the
+    published figure does not have. Without it the reader has no way to tell a
+    gap between two libraries that their own stated uncertainties already cover
+    from one that they do not, and those are opposite findings: the first says
+    the evaluations are consistent, the second that at least one of them is
+    wrong about something it claims to know.
+
+    A library whose evaluations state no MF=33 gets a curve and no band. That is
+    the honest rendering, and it is not the same as a narrow band: the caption
+    names those libraries so a bare line is not read as a confident one.
+    """
+    times = np.array(results[0][1]["times"], dtype=float)
+    measured = np.array(results[0][1]["measured_uW_per_g"], dtype=float)
+    sigma = np.array(results[0][1]["measured_uncertainty"], dtype=float)
+
+    for library, result in results:
+        values = calculated_of(result)
+        colour = colours[library]
+        spread = uncertainty_of(result)
+        if spread is not None:
+            draw_band(axes, times, values, spread, colour)
+        axes.plot(times, values, "-", linewidth=1.1, color=colour,
+                  label=library_label(library), zorder=2)
+
+    axes.errorbar(times, measured, yerr=sigma, fmt="^", color="#333333",
+                  markersize=3, linewidth=0.7, label="FNS Experiment", zorder=4)
+
+    # Scaled on the totals and the measurement, which is everything drawn here,
+    # rather than on `heat_limits`: that one ranges on a single library's
+    # calculated array and would cut off whichever other library sits furthest
+    # from it, which is the comparison this panel exists to show.
+    edges = np.concatenate([measured - sigma, measured + sigma]
+                           + [calculated_of(result) for _n, result in results])
+    edges = edges[np.isfinite(edges) & (edges > 0)]
+    if edges.size:
+        axes.set_ylim(edges.min() / PANEL_HEADROOM, edges.max() * PANEL_HEADROOM)
+
+    # Linear in time, and the only panel in this report that is. Every other one
+    # is logarithmic because it is showing a decay over three decades, where a
+    # log axis is the only one that resolves both ends. This panel is not doing
+    # that: it is showing four libraries against one measurement, and it is set
+    # the way the published figure sets it so the two can be laid side by side
+    # and read as the same picture. A reader checking this report against that
+    # one should not have to correct for the axes first.
+    #
+    # From zero rather than from the first cooling point, again as published.
+    axes.set_xlim(left=0.0)
+    axes.set_yscale("log")
+    axes.set_xlabel(f"Time after irradiation [{results[0][1]['time_unit']}]",
+                    fontsize=fontsize)
+    axes.set_ylabel("Heat Output [µW/g]", fontsize=fontsize)
+    axes.set_title(f"FNS {results[0][1]['experiment']} - {case} - all libraries",
+                   fontsize=fontsize + 1.0)
+    _finish_panel(axes, fontsize)
+
+
+def comparison_page(pdf, case, sections, colours, title, subtitle, number, total):
+    """One panel per campaign, each carrying every library and the measurement.
+
+    Bound as one page rather than one per campaign, which is how the published
+    reports open a foil, and for the same reason the document is one document:
+    a foil measured three times is one subject, and the campaigns are worth
+    seeing against each other. Tungsten is the case that earns it -- the same
+    cross sections read 122%, 65% and 20% out across its three campaigns, and
+    three panels on one page say that in a way three pages cannot.
+    """
+    figure = page(pdf, title, subtitle, number, total)
+    rows = len(sections)
+    top, floor = 0.90, 0.085
+
+    caption = (
+        "Every library's total decay heat against the measurement, one panel per "
+        "campaign. The shaded\nband on each curve is that library's own +/- 1 sigma "
+        "from its MF=33 cross-section covariance,\nresampled and re-solved per "
+        "replica, so two libraries whose bands overlap do not disagree.")
+    missing = sorted({library_label(library) for _experiment, results in sections
+                      for library, result in results
+                      if uncertainty_of(result) is None})
+    if missing:
+        caption += ("\nDrawn without a band: " + ", ".join(missing) +
+                    ". Those runs carried no covariance, which is not the same "
+                    "as a\nnarrow one; a bare curve here is an unquantified "
+                    "curve, not a confident one.")
+
+    # A band can also be too thin to see for the same reason, which is worse:
+    # absence at least looks like absence, while a hairline band looks like a
+    # well determined answer. Named here on the same terms, because the panel
+    # is where the bands are compared and it is the comparison that misleads.
+    thin = sorted({library_label(library) for _experiment, results in sections
+                   for library, result in results
+                   if (rate_coverage(result) or 1.0) < COVERAGE_FLOOR})
+    if thin:
+        caption += ("\nBand spans a minority of the production rate: " +
+                    ", ".join(thin) + ". Their covariance says nothing about "
+                    "the\nchannels carrying most of the heat, so the band is "
+                    "narrow because it is nearly empty.")
+
+    # The gridspec bottom is the axes box, and the x label and tick labels of
+    # the last panel are drawn below it, so the caption has to clear those as
+    # well as itself. XLABEL_CLEAR is that overhang; without it the caption runs
+    # through "Time after irradiation".
+    height = text_height(figure, caption, 7.2)
+    grid = figure.add_gridspec(rows, 1, left=0.10, right=0.82, top=top,
+                               bottom=floor + height + XLABEL_CLEAR, hspace=0.42)
+    for row, (_experiment, results) in enumerate(sections):
+        draw_comparison(figure.add_subplot(grid[row, 0]), case, results, colours)
+
+    figure.text(0.08, floor + height + 0.004, caption, va="top", fontsize=7.2,
+                color="#555555")
+    pdf.savefig(figure)
+    plt.close(figure)
 
 
 def draw_share(axes, case, library, result, products, colours, fontsize=6.5):
@@ -1507,7 +1759,7 @@ def draw_share(axes, case, library, result, products, colours, fontsize=6.5):
     axes.set_ylim(0, 100)
     axes.set_xlabel(f"Time after irradiation [{result['time_unit']}]", fontsize=fontsize)
     axes.set_ylabel("%decay heat contributions", fontsize=fontsize)
-    axes.set_title(f"FNS {result['experiment']} - {case} - {library}",
+    axes.set_title(f"FNS {result['experiment']} - {case} - {library_label(library)}",
                    fontsize=fontsize + 1.0)
     _finish_panel(axes, fontsize)
 
@@ -1702,12 +1954,18 @@ def build(case, experiments, libraries, results_root, chain, decay, depth, out,
     # routes decide how many pages they need.
     layouts = [pathway_layout(results, routes, note, half_lives, depth)
                for _experiment, results in sections]
-    total = 1 + sum(2 + len(layout["pages"]) for layout in layouts)
+    total = 2 + sum(2 + len(layout["pages"]) for layout in layouts)
+
+    # Coloured off the libraries as asked for rather than off the ones any one
+    # campaign happens to carry, so a library missing from one campaign does not
+    # shift every colour after it on that campaign's panel alone.
+    colours = library_colours(libraries)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         cover_page(pdf, case, sections, title, subtitle, 1, total)
-        number = 2
+        comparison_page(pdf, case, sections, colours, title, subtitle, 2, total)
+        number = 3
         for (_experiment, results), layout in zip(sections, layouts):
             table_page(pdf, case, results, half_lives, title, subtitle,
                        number, total)
@@ -1762,8 +2020,8 @@ def main():
                              "half-lives and the pathway page. Its branching/ is "
                              "what puts isomers on the page, so prefer the "
                              "library's own over a generic chain. Default: "
-                             "data/<primary library>/chain if it is there, and "
-                             "without it those columns are left out")
+                             "data/<primary library>/chain-<case> if it is "
+                             "there, and without it those columns are left out")
     parser.add_argument("--data", type=pathlib.Path, default=HERE / "data",
                         help="root convert_to_arrow.py filed its conversions "
                              "under, searched for the default --chain "
@@ -1827,7 +2085,7 @@ def main():
 
         chain = args.chain
         if chain is None:
-            chain, from_library = discover_chain(libraries, args.data)
+            chain, from_library = discover_chain(libraries, args.data, case)
             if chain is not None and from_library != libraries[0]:
                 print(f"chain: taken from {from_library}, which is not the primary "
                       f"library. Its isomeric branching is {from_library}'s, not "
