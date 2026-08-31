@@ -398,10 +398,10 @@ unmissable. The same foil, the same spectrum, the same solver, on
 
 | library | median C/E | mean deviation | data sigma | isotopes with MF=33 | rate covered |
 |---|---|---|---|---|---|
-| tendl-2025 | 1.064 | 6.0% | **33%** | 4 of 4 | 99.8% |
-| jeff-4.0 | 1.060 | 5.5% | **1.2%** | 4 of 4 | 99.4% |
-| endf-b8.1 | 1.057 | 4.9% | **1.2%** | 2 of 4 | **32%** |
-| jendl-5.0 | 1.094 | 8.8% | **4.9%** | 2 of 4 | **45%** |
+| tendl-2025 | 1.064 | 6.0% | **33%** | 4 of 4 | 99.9% |
+| jeff-4.0 | 1.060 | 5.5% | **1.2%** | 4 of 4 | 99.5% |
+| endf-b8.1 | 1.057 | 4.9% | **1.2%** | 2 of 4 | 95.6% |
+| jendl-5.0 | 1.094 | 8.8% | **4.9%** | 2 of 4 | 89.2% |
 
 All four track the measurement to within about 9%, and the sigmas beside that
 span a factor of 27. Nothing in the transport, the chain or the solver accounts
@@ -416,26 +416,38 @@ same 6% against a genuine 1.2% would be a real disagreement.
 
 **The last column is the one that decides whether the sigma beside it means
 anything**, and it is not the isotope count. Counting isotopes with MF=33 asks
-whether an evaluation says something; weighting by rate asks whether it says it
-about the reactions this irradiation actually drove. The two come apart badly,
-and tungsten is where they come apart completely:
+whether an evaluation says something; weighting by production asks whether it
+says it about the reactions this irradiation actually drove.
+
+On iron the count is the pessimistic one. ENDF/B-VIII.1 covers 2 of 4 isotopes,
+which reads as half a foil, and the two it covers are Fe54 and Fe56; Fe56 alone
+is 91.75% of natural iron, so 95.6% of the production is covered and the 1.2%
+beside it is a real number. JENDL-5 is the same shape. Reading the isotope count
+alone would throw away two sigmas that are worth having.
+
+Tungsten is where it fails the other way, and completely:
 
 | library | median C/E | mean deviation | data sigma | isotopes with MF=33 | rate covered |
 |---|---|---|---|---|---|
-| tendl-2025 | 2.355 | 122.0% | 5.5% | 5 of 5 | 99.0% |
-| jeff-4.0 | 1.805 | 78.9% | <0.1% | 5 of 5 | **4.8%** |
-| endf-b8.1 | 1.805 | 78.9% | <0.1% | 5 of 5 | **4.8%** |
-| jendl-5.0 | 1.669 | 71.7% | none | 0 of 5 | 0% |
+| tendl-2025 | 2.355 | 122.0% | 5.5% | 5 of 5 | 99.3% |
+| jeff-4.0 | 1.805 | 78.9% | <0.1% | 5 of 5 | **5.6%** |
+| endf-b8.1 | 1.805 | 78.9% | <0.1% | 5 of 5 | **5.6%** |
+| jendl-5.0 | 1.669 | 71.7% | none | 0 of 5 | none |
 
 JEFF-4.0 and ENDF/B-VIII.1 state covariance for every natural tungsten isotope,
 so "5 of 5" is true and reads as complete coverage. What they state it for is
 `(n,3n)` and `(n,gamma)`. The `W186(n,2n)W185m` that makes 98% of this foil's
-decay heat has no MF=33 at all, so the ensemble perturbs 4.8% of the production
+decay heat has no MF=33 at all, so the ensemble perturbs 5.6% of the production
 and reports a spread of under 0.1%: the most confident number in the table and
 the least earned. yani files the per-channel coverage as
-`rate_fraction_covered`, step 2 folds it against its own reaction rates and
-prints the total, and the report page says so under any table whose covariance
-spans less than 90% of the production.
+`rate_fraction_covered`, step 2 folds it against its own reaction rates and the
+foil's own densities, and the report page says so under any table whose
+covariance spans less than 90% of the production.
+
+Both weights are load-bearing. Weighting by rate alone, without the density of
+the parent each rate belongs to, counts a channel on a trace isotope the same as
+one on the bulk and puts ENDF/B-VIII.1's iron at 32% rather than 96%, which is
+the opposite conclusion about whether its sigma is worth reading.
 
 JENDL-5 is the honest end of the same problem. Its tungsten carries no MF=33
 anywhere, so no ensemble runs, and the columns are left empty rather than
