@@ -157,23 +157,26 @@ def main():
             f"archive once for each of the {len(wanted)} foils in this sweep."
         )
 
-    # The chain is rebuilt per foil, scoped to that foil's own isotopes, so the
-    # writer and the reader have to be handed the SAME path explicitly. Leaving
-    # either of them to work it out from its own arguments is how a foil ends up
-    # read against the PREVIOUS foil's chain: no reaction in it has this foil's
+    # The chain is scoped to one foil's isotopes, so it is written per foil and
+    # the writer and the reader have to be handed the SAME path. Leaving either
+    # of them to work it out from its own arguments is how a foil ends up read
+    # against a different foil's chain: no reaction in it has this foil's
     # nuclides as a parent, so nothing is produced and the decay heat comes out
     # a silent zero rather than an error.
-    chain_dir = HERE / "data" / source / "chain"
+    #
+    # One directory per foil rather than one rebuilt in place. The sweep alone
+    # would be fine either way, since it converts and runs a foil before moving
+    # on, but what it leaves behind is read later: make_report.py picks the
+    # chain up off disk long afterwards, and a single path holds only whichever
+    # foil the sweep happened to finish on.
     converter_args = ["--library", args.library,
                       "--source", source,
-                      "--output", str(args.cross_sections),
-                      "--chain", str(chain_dir)]
+                      "--output", str(args.cross_sections)]
     if args.endf_dir is not None:
         converter_args += ["--endf-dir", str(args.endf_dir)]
     if args.tarball is not None:
         converter_args += ["--tarball", str(args.tarball)]
     runner_args = ["--cross-sections", str(args.cross_sections),
-                   "--chain", str(chain_dir),
                    "--output", str(args.output)]
     args.output.mkdir(parents=True, exist_ok=True)
 
@@ -183,7 +186,9 @@ def main():
     for index, case in enumerate(wanted, 1):
         elapsed = time.perf_counter() - start
         print(f"[{index}/{len(wanted)}] {case} ({elapsed / 60:.0f} min in)", flush=True)
-        summary = run_case(case, args.experiment, args.output, converter_args, runner_args)
+        chain = ["--chain", str(HERE / "data" / source / f"chain-{case}")]
+        summary = run_case(case, args.experiment, args.output,
+                           converter_args + chain, runner_args + chain)
         if summary is None:
             failed.append(case)
             continue

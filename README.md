@@ -160,7 +160,15 @@ python run_transmutation.py --case W --cross-sections data/libs/neutron
 ```
 
 When `--cross-sections` ends with `/neutron`, `run_transmutation.py` defaults
-`--chain` to the sibling `/chain` directory.
+`--chain` to the sibling `/chain-<case>` directory.
+
+The foil is in that name because the chain is scoped to one foil's isotopes
+while the cross sections are not. `data/tendl-2025/neutron/` accumulates every
+nuclide ever converted into it, so converting tungsten after iron adds
+`W186.arrow` beside `Fe56.arrow` and takes nothing away; a chain written to a
+shared path would instead replace the previous foil's, leaving that foil
+unrunnable and the report walking its pathways through a topology built for
+somebody else's parents.
 
 ### One folder per library
 
@@ -209,13 +217,14 @@ python make_report.py            # one document per foil, all of its campaigns
 python make_report.py --case W   # just this one
 ```
 
-Binds the per-foil JSON into `results/report_<case>.pdf`: the foil named, then
-the C/E table with an E/C column per library and, under it, the nuclide E/C
-analysis and that library's heat curve; then the production pathways, over as
-many pages as they need; then the heat curves with their percentage
-contributions. Nothing is recomputed: step 2 already wrote the full per-nuclide
-breakdown and the sigma on it, so a report is cheap to regenerate and cannot
-disagree with the run it came from.
+Binds the per-foil JSON into `results/report_<case>.pdf`: the foil named; then
+every library's total against the measurement, one panel per campaign; then the
+C/E table with an E/C column per library and, under it, the nuclide E/C analysis
+and that library's heat curve; then the production pathways, over as many pages
+as they need; then the heat curves with their percentage contributions. Nothing
+is recomputed: step 2 already wrote the full per-nuclide breakdown and the sigma
+on it, so a report is cheap to regenerate and cannot disagree with the run it
+came from.
 
 **One document per foil, covering every campaign it was measured in.** The last
 three pages repeat per campaign. A foil measured more than once is still one
@@ -239,7 +248,7 @@ absolute values the table carries:
 
 ```bash
 python make_report.py --case W --libraries tendl-2025 tendl-2017 \
-    --chain data/tendl-2025/chain
+    --chain data/tendl-2025/chain-W
 ```
 
 Beside the PDF go the same tables in a form something else can read:
@@ -327,17 +336,27 @@ is what it always was: `--no-uncertainty` reproduces the old bare value exactly,
 and the whole ensemble costs about a second.
 
 On W/2000exp_5min against TENDL-2025 the calculated heat comes out good to 5.5%
-in the median, 4.2% to 6.2% over the cooling points, against the `+/- 6%` falling
+in the median, 4.3% to 6.1% over the cooling points, against the `+/- 6%` falling
 to `+/- 4%` the published table carries for the same foil. `%ΔCnuc` on W185m
 comes out at 6%, which is what the report prints.
 
 Two things about that number are worth knowing before it is used.
 
-It is the **activation cross sections and nothing else**. Half-lives, decay
-branching ratios, fission yields and the isomeric-branching overlay are held at
-their evaluated values, and the flux is taken as exact because nothing is
-transported. Step 2 prints what it did not propagate rather than leaving that to
-be assumed.
+It is **the activation cross sections**, in practice and not by construction.
+Half-lives, decay branching ratios, fission yields and the isomeric-branching
+overlay are held at their evaluated values. The flux is the one that could move
+and does not: yani 0.12.0 perturbs the spectrum as a second source and asks for
+both by default (`DataUncertainty.available_sources()` returns
+`['cross_sections', 'flux_spectrum']`), but the FNS benchmark publishes its
+measured spectrum as 709 group fluxes with no sigma on them, so there is nothing
+to draw from and the source contributes exactly zero. yani counts that rather
+than passing over it: `spectra_without_flux_sigma` is 1 on every run here.
+
+The distinction matters because those are different statements. A flux held
+fixed by choice would be an approximation this example made; a flux held fixed
+for want of a published sigma is a gap in the benchmark, and it will close on
+its own the day the spectrum arrives with uncertainties. Step 2 prints what it
+did not propagate rather than leaving that to be assumed.
 
 A **sigma of zero is not a claim of certainty**. An evaluation that states no
 MF=33 is perturbed by nothing and its products come back exact, which on the
@@ -374,35 +393,61 @@ so the first few points test three cross sections and the tail tests one.
 
 The uncertainty on the calculated value is the library's own account of itself,
 not a property of the calculation, and iron is the case that makes that
-unmissable. The same foil, the same spectrum, the same solver:
+unmissable. The same foil, the same spectrum, the same solver, on
+`2000exp_5min`:
 
-| library | median C/E | mean deviation | data sigma | isotopes with MF=33 |
-|---|---|---|---|---|
-| tendl-2025 | 1.064 | 6.0% | **33%** | 4 of 4 |
-| endf-b8.1 | 1.057 | 4.9% | **1.2%** | 2 of 4 |
+| library | median C/E | mean deviation | data sigma | isotopes with MF=33 | rate covered |
+|---|---|---|---|---|---|
+| tendl-2025 | 1.064 | 6.0% | **33%** | 4 of 4 | 99.8% |
+| jeff-4.0 | 1.060 | 5.5% | **1.2%** | 4 of 4 | 99.4% |
+| endf-b8.1 | 1.057 | 4.9% | **1.2%** | 2 of 4 | **32%** |
+| jendl-5.0 | 1.094 | 8.8% | **4.9%** | 2 of 4 | **45%** |
 
-Both track the measurement to within about 5%, and the two numbers beside that
-differ by a factor of 27. Nothing in the transport, the chain or the solver
-accounts for it: it is what the two evaluations state about their own Fe56(n,p),
-which carries most of this foil's heat. TENDL's covariances come from varying
-TALYS parameters and are wide; ENDF/B-VIII.1's Fe56 is one of the most measured
-cross sections there is and its covariance is correspondingly tight.
+All four track the measurement to within about 9%, and the sigmas beside that
+span a factor of 27. Nothing in the transport, the chain or the solver accounts
+for it: it is what each evaluation states about its own Fe56(n,p), which carries
+most of this foil's heat. TENDL's covariances come from varying TALYS parameters
+and are wide; ENDF/B-VIII.1's Fe56 is one of the most measured cross sections
+there is and its covariance is correspondingly tight.
 
-Neither number is wrong, and the second is the one to be careful with. Part of
-that 1.2% is Fe57 and Fe58 carrying no MF=33 at all, so their reactions were
-perturbed by nothing and came back exact. That is a gap and not a measurement,
-which is why the report prints it under the table rather than letting a small
-sigma read as a well-determined one. Read the two columns together: a 6%
-deviation against a 33% sigma is a foil this library cannot resolve, and the
+Read the sigma against the deviation and they say different things: a 6%
+deviation against a 33% sigma is a foil that library cannot resolve, and the
 same 6% against a genuine 1.2% would be a real disagreement.
 
-Tungsten is the other end of it. Against TENDL-2025 the calculated heat is good
-to 5.5% in the median while sitting 122% from the measurement, which is a
-disagreement no account of the cross-section uncertainty absorbs, and the
-pathway page says where it lives.
+**The last column is the one that decides whether the sigma beside it means
+anything**, and it is not the isotope count. Counting isotopes with MF=33 asks
+whether an evaluation says something; weighting by rate asks whether it says it
+about the reactions this irradiation actually drove. The two come apart badly,
+and tungsten is where they come apart completely:
 
-Swapping the cross sections for ENDF/B-8.1, with everything else held fixed,
-turns this into a library comparison:
+| library | median C/E | mean deviation | data sigma | isotopes with MF=33 | rate covered |
+|---|---|---|---|---|---|
+| tendl-2025 | 2.355 | 122.0% | 5.5% | 5 of 5 | 99.0% |
+| jeff-4.0 | 1.805 | 78.9% | <0.1% | 5 of 5 | **4.8%** |
+| endf-b8.1 | 1.805 | 78.9% | <0.1% | 5 of 5 | **4.8%** |
+| jendl-5.0 | 1.669 | 71.7% | none | 0 of 5 | 0% |
+
+JEFF-4.0 and ENDF/B-VIII.1 state covariance for every natural tungsten isotope,
+so "5 of 5" is true and reads as complete coverage. What they state it for is
+`(n,3n)` and `(n,gamma)`. The `W186(n,2n)W185m` that makes 98% of this foil's
+decay heat has no MF=33 at all, so the ensemble perturbs 4.8% of the production
+and reports a spread of under 0.1%: the most confident number in the table and
+the least earned. yani files the per-channel coverage as
+`rate_fraction_covered`, step 2 folds it against its own reaction rates and
+prints the total, and the report page says so under any table whose covariance
+spans less than 90% of the production.
+
+JENDL-5 is the honest end of the same problem. Its tungsten carries no MF=33
+anywhere, so no ensemble runs, and the columns are left empty rather than
+filled with a zero. An empty column is a question; a `0.0%` is an answer, and it
+would be the wrong one.
+
+On tungsten against TENDL-2025 the calculated heat is good to 5.5% in the median
+while sitting 122% from the measurement, which is a disagreement no account of
+the cross-section uncertainty absorbs, and the pathway page says where it lives.
+
+Swapping the cross sections for another library, with everything else held
+fixed, turns this into a library comparison:
 
 ```bash
 python convert_to_arrow.py --endf-dir /path/to/endfb-8.1 --library endf-b8.1 \
@@ -410,10 +455,49 @@ python convert_to_arrow.py --endf-dir /path/to/endfb-8.1 --library endf-b8.1 \
 python run_transmutation.py --cross-sections data/b81 --output results/b81
 ```
 
+### Against the published tables
+
+The UKAEA decay-heat validation report carries the same foil against four
+libraries, and all four are reproducible here from ENDF on your own machine:
+
+```bash
+for lib in tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0; do
+  python convert_to_arrow.py  --case W --endf-dir /path/to/$lib --source $lib
+  python run_transmutation.py --case W --source $lib
+done
+python make_report.py --case W --libraries tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0
+```
+
+`--libraries` fixes the column order; without it the report picks its own and
+still makes TENDL-2025 primary. Tungsten on `2000exp_5min`, our figures of merit
+beside the published ones:
+
+| library | mean % diff (pub) | ours | mean chi2 (pub) | ours |
+|---|---|---|---|---|
+| tendl-2025 | 122 | **122** | 105.24 | **105.14** |
+| jeff-4.0 | 79 | **79** | 43.56 | **42.81** |
+| endf-b8.1 | 77 | **79** | 41.20 | **42.81** |
+| jendl-5.0 | 69 | **72** | 35.51 | **37.05** |
+
+and on `1996exp_7hour`, 21/20, 27/28, 27/28 and 19/23. The E/C columns agree
+point by point to within 0.01 to 0.03 nearly everywhere.
+
+One row is worth reading twice. Our JEFF-4.0 and ENDF/B-VIII.1 tungsten results
+are **identical**, where the published table has them a little apart. That is
+not a mix-up at this end: JEFF-4.0 adopted ENDF/B-VIII.1's tungsten wholesale,
+and the two files on disk agree byte for byte over MF=2, MF=3, MF=8 and MF=33.
+What differs is MF=1, which is descriptive text, and one endpoint of the MF=10
+grid at 150 MeV, an order of magnitude in energy above the 14 MeV a D-T source
+produces and outside this spectrum entirely. Identical inputs give identical
+outputs, and the converted `nuclide.arrow` files hash the same. Where two
+libraries carry one evaluation, a comparison that shows them differing is
+reporting something other than the data.
+
 ### What else comes out of the same evaluations
 
 `convert_to_arrow.py` writes four things, not one. The cross sections, a
-`covariance.arrow` beside each of them, and two subsections under `data/chain/`:
+`covariance.arrow` beside each of them, and two subsections under
+`data/<source>/chain-<case>/`:
 
 * `branching/`, which decides how much of an (n,2n) leaves the product in its
   metastable state rather than its ground state. That fraction is energy

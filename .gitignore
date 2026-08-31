@@ -8,3 +8,11 @@ __pycache__/
 # alone is over a hundred MB for one foil.
 data/
 results/
+
+# PDFs, wherever they land. The ones this repo makes are already covered by
+# `results/`; this is for the ones that arrive from outside it, which are the
+# published validation reports the output gets checked against. Those are
+# somebody else's publication and not ours to redistribute, so the default is
+# that a PDF sitting in the working tree stays there. Add one deliberately with
+# `git add -f` if it is genuinely ours.
+*.pdf
