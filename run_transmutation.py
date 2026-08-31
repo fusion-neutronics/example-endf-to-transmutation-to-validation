@@ -47,6 +47,24 @@ HERE = pathlib.Path(__file__).resolve().parent
 # The temperature the cross sections were broadened to by convert_to_arrow.py.
 TEMPERATURE = 294.0
 
+# Peak share of the decay heat a product needs before its production routes are
+# worked out and filed. Set under make_report.py's own SHARE_FLOOR so the report
+# still decides what to print, and above zero because a chain reaches hundreds of
+# nuclides and almost none of them ever carry a row.
+ROUTE_PRODUCT_FLOOR = 0.001
+
+# How far a route may run: neutron reactions, and then decay steps after them.
+#
+# One reaction is what the published pathway pages carry, and what these
+# irradiations can support. A second reaction step costs another factor of the
+# fluence, and at 1e10 n/cm2/s for five minutes that is a fluence of 3e12, so a
+# two-step route arrives at parts in a billion of a one-step one.
+#
+# Three decay steps covers what these reach: the longest route the published
+# pages carry is W182(n,p)Ta182n(IT)Ta182m(IT)Ta182, which is three.
+ROUTE_REACTION_STEPS = 1
+ROUTE_DECAY_STEPS = 3
+
 # Half-lives, decay modes and decay energies, and the fallback for anything
 # convert_to_arrow.py did not write. Held on endf-b8.1 because TENDL publishes
 # no decay sublibrary.
@@ -85,17 +103,6 @@ def subsections_of(chain):
     if chain is None or not (chain / "manifest.json").is_file():
         return set()
     return set(json.loads((chain / "manifest.json").read_text()).get("subsections", {}))
-
-
-def scope_of(chain):
-    """Which parents the chain covers, from the sidecar convert_to_arrow.py wrote.
-
-    None where the chain predates the sidecar, which is not the same as a chain
-    covering nothing: those fall through to the zero-heat check after the solve.
-    """
-    if chain is None or not (chain / "scope.json").is_file():
-        return None
-    return set(json.loads((chain / "scope.json").read_text()).get("parents", []))
 
 
 def decay_heat_spread(results, material_id, case, steps, keys):
@@ -154,44 +161,7 @@ def decay_heat_spread(results, material_id, case, steps, keys):
             by_nuclide)
 
 
-def rate_coverage(info, edge_rates, densities):
-    """Share of the production this solve actually drove that carries a sigma.
-
-    The count of nuclides with MF=33 is the wrong question, and tungsten is where
-    that becomes obvious. ENDF/B-VIII.1 states covariance for all five natural W
-    isotopes, so "5 of 5" is true and reads as complete, but what it states it
-    for is ``(n,3n)`` and ``(n,gamma)``: the ``W186(n,2n)W185m`` that makes 98%
-    of this foil's decay heat has no covariance at all. The ensemble then
-    perturbs almost nothing and reports a spread of 0.02%, which is the most
-    confident number on the page and the least earned.
-
-    So the honest measure is weighted by what each channel actually made rather
-    than counted by nuclide: of all the production this irradiation drove, how
-    much went through a channel the covariance spans. ``rate_fraction_covered``
-    gives the share per channel, which is not always 1 even for a channel that
-    has covariance, since the covariance grid can stop short of the spectrum.
-
-    Weighted by the parent's own density as well as by its rate, because an edge
-    rate is per atom of its parent and production is not. Leaving the density
-    out counts a channel on a trace isotope the same as one on the bulk, and on
-    iron that is the difference between a right answer and a wrong one:
-    ENDF/B-VIII.1 publishes MF=33 for Fe54 and Fe56 and not for Fe57 or Fe58, and
-    Fe56 alone is 91.75% of natural iron, so the covered share is 96% rather than
-    the 32% an unweighted count of channels gives.
-
-    Returns a fraction in [0, 1], or None if there is nothing to weigh.
-    """
-    covered = info.get("rate_fraction_covered") or {}
-    weight = [(densities.get(parent, 0.0) * rate,
-               covered.get(f"{parent} {kind}", 0.0))
-              for parent, kind, _target, rate in edge_rates]
-    total = sum(made for made, _fraction in weight)
-    if not total:
-        return None
-    return sum(made * fraction for made, fraction in weight) / total
-
-
-def report_uncertainty(info, relative, edge_rates=(), densities=None):
+def report_uncertainty(info, relative):
     """What the sigma covered, printed under the C/E it qualifies.
 
     A sigma is only readable next to what it left out. A zero on a nuclide whose
@@ -234,8 +204,10 @@ def report_uncertainty(info, relative, edge_rates=(), densities=None):
     # Beside the count, the share of the production it actually reaches. A
     # library can state covariance for every isotope in the foil and still say
     # nothing about the one channel carrying the heat, and then the count reads
-    # as coverage the sigma does not have.
-    fraction = rate_coverage(info, edge_rates, densities or {})
+    # as coverage the sigma does not have. yani weights it by rate and by the
+    # parent's own density, which this used to do by hand and got wrong: an edge
+    # rate is per atom of its parent and production is not.
+    fraction = info.get("rate_fraction_covered_total")
     if fraction is not None:
         lines.append(f"covering {fraction * 100:.1f}% of the production rate "
                      f"this irradiation drove"
@@ -322,22 +294,11 @@ def run(case, cross_sections, chain, uncertainty=None):
     nuclides = sorted(material.get_nuclide_names())
     print(f"material: {len(nuclides)} nuclides, {' '.join(nuclides)}")
 
-    # The chain is rebuilt per foil and scoped to that foil's isotopes, so one
-    # left over from a different foil carries no reactions for these nuclides
-    # and solves to an inventory of nothing. That surfaced only as zero decay
-    # heat at the end of a full run, which names neither the foil the chain was
-    # built for nor the nuclides it is missing. Refuse it up front instead.
-    covered = scope_of(chain)
-    missing = sorted(set(nuclides) - covered) if covered is not None else []
-    if missing:
-        raise SystemExit(
-            f"{case.name}: the chain at {chain} was built for "
-            f"{' '.join(sorted(covered)) or 'nothing'}, so it has no reactions for "
-            f"{' '.join(missing)}.\n"
-            f"Rebuild it for this foil and try again:\n"
-            f"  python convert_to_arrow.py --case {case.name} "
-            f"--output {cross_sections} --chain {chain}"
-        )
+    # A chain left over from a different foil carries no reactions for these
+    # nuclides and used to solve to an inventory of nothing, which surfaced only
+    # as zero decay heat at the end of a full run. yani 0.13.0 refuses it before
+    # the solve and names both the material and what the chain covers, so the
+    # sidecar this file used to write and check is gone.
 
     # `transmute` hands back a TransmutationResults keyed by material id, not a
     # plain list. Its index 0 is the initial composition, so `step_materials` is
@@ -428,7 +389,37 @@ def run(case, cross_sections, chain, uncertainty=None):
             f"  python convert_to_arrow.py --case {case.name} "
             f"--output {cross_sections} --chain {chain}"
         )
-    return heat, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma, info
+    # The production routes into each product that carries heat, and the
+    # flux-weighted isomeric branching, both derived by yani from the chain and
+    # the rates the solve actually ran with. They were rebuilt in step 5 from
+    # `edge_rates` plus a second load of the chain, which is a few hundred lines
+    # of walking and one chance for the two chains to differ; yani 0.13.0
+    # answers from the solve itself.
+    #
+    # Routes are asked for over the first irradiation pulse. Every pulse in
+    # these schedules shares one spectrum, so the shares are the same for each,
+    # and a cooldown drives no reactions at all.
+    #
+    # Only for products that carry heat. Walking every nuclide the chain can
+    # reach costs time to answer a question about nuclides nobody will read a
+    # row for; the floor is under step 5's own so the report can still choose.
+    peak = {}
+    for step in breakdown:
+        total = sum(step.values()) or 1.0
+        for nuclide, watts in step.items():
+            peak[nuclide] = max(peak.get(nuclide, 0.0), watts / total)
+    routes = {
+        nuclide: results.get_production_routes(
+            material_id, nuclide, 0,
+            reaction_depth=ROUTE_REACTION_STEPS,
+            decay_depth=ROUTE_DECAY_STEPS) or []
+        for nuclide, share in sorted(peak.items())
+        if share >= ROUTE_PRODUCT_FLOOR
+    }
+    branching = results.get_isomeric_branching(material_id, 0) or {}
+
+    return (heat, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
+            info, routes, branching)
 
 
 def summarise(case, calculated):
@@ -638,7 +629,8 @@ def main():
     uncertainty = None if args.no_uncertainty else yani.DataUncertainty(
         seed=args.seed, samples=args.samples)
 
-    calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma, info = run(
+    (calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
+     info, routes, branching) = run(
         case, args.cross_sections, args.chain, uncertainty)
     ratio, metrics = summarise(case, calculated)
     plot(case, calculated, breakdown, ratio, metrics, args.output, sigma)
@@ -658,7 +650,7 @@ def main():
           f"mean deviation {metrics['mean_deviation_percent']:.1f}%, "
           f"measurement sigma {metrics['median_measurement_sigma_percent']:.1f}%")
     if info is not None:
-        report_uncertainty(info, relative, edge_rates, initial_atoms)
+        report_uncertainty(info, relative)
 
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / f"fns_{case.name}_{case.experiment}.json").write_text(json.dumps({
@@ -687,6 +679,11 @@ def main():
         "yani_uncertainty_uW_per_g": None if sigma is None else sigma.tolist(),
         "by_nuclide_uncertainty_uW_per_g": by_nuclide_sigma,
         "data_uncertainty_info": info,
+        # Derived by yani from the chain and the rates this solve ran with, so
+        # the report binds them rather than deriving them from a chain it loads
+        # separately and hopes is the same one.
+        "production_routes": routes,
+        "isomeric_branching": branching,
     }, indent=2))
 
 

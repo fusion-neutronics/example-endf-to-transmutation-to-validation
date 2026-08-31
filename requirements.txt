@@ -15,7 +15,7 @@ njoy2016
 # `PIL`). Wheels are published for Linux x86_64, Windows x64 and macOS arm64,
 # abi3 from Python 3.10 up, so there is nothing to build.
 #
-# The floor buys seven things, all of them load-bearing here:
+# The floor buys ten things, all of them load-bearing here:
 #
 #   * `TransmutationChain.decays` (0.8), so make_report.py can follow a
 #     production route past its neutron reaction. Without it a route stops at
@@ -45,14 +45,29 @@ njoy2016
 #     files with. Stripping the digits off "Ta180_m1" leaves "Ta180_m" and a
 #     mass number of 1, and natural tantalum really does contain Ta180m, so
 #     this used to be a splitter kept here purely to avoid that.
+#   * `TransmutationResults.get_production_routes` and
+#     `get_isomeric_branching` (0.13.0), which make_report.py's pathway page is
+#     built from. Both used to be derived here: the routes by walking the chain
+#     from the foil's isotopes and weighting them out of the per-edge rates,
+#     which was 500 lines and needed the chain loaded a second time, and the
+#     branching by taking ratios within a channel's edges. yani answers both
+#     from the chain and the rates the solve actually ran with.
+#   * `data_uncertainty_info["rate_fraction_covered_total"]` (0.13.0), the share
+#     of the production the covariance spans. This was folded here out of
+#     `rate_fraction_covered` and the edge rates, joined on a string key, and
+#     weighted by rate but not by the density of the parent each rate belongs
+#     to, which is a factor of three wrong on iron.
+#   * A chain built for a different foil is refused by `transmute` (0.13.0)
+#     rather than solving to an inventory of nothing. run_transmutation.py used
+#     to write a `scope.json` sidecar beside each chain and check it itself.
 #
-# 0.12.0 for both names: `yani` 0.12.0 pins `yani-core==0.12.0`, so the wrapper
+# 0.13.0 for both names: `yani` 0.13.0 pins `yani-core==0.13.0`, so the wrapper
 # and the compiled wheel move together and a floor on the one is a floor on the
 # other.
 #
 # A floor turns each of those into an unsatisfiable requirement pip reports up
 # front, rather than an AttributeError partway through a run.
-yani>=0.12.0
+yani>=0.13.0
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no
