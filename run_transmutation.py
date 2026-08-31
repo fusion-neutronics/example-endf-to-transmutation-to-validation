@@ -60,18 +60,23 @@ def available_cross_section_sources(data_root):
     return sorted(path.parent.name for path in data_root.glob("*/neutron") if path.is_dir())
 
 
-def inferred_chain_path(cross_sections):
+def inferred_chain_path(cross_sections, case):
     """The matching chain directory for a standard neutron path, or None.
 
     convert_to_arrow.py writes cross sections to data/<source>/neutron and the
-    chain subsections to data/<source>/chain. If run_transmutation.py is pointed
-    at that neutron directory, prefer the sibling chain by default so both come
-    from the same conversion run.
+    chain subsections to data/<source>/chain-<case>. If run_transmutation.py is
+    pointed at that neutron directory, prefer the sibling chain by default so
+    both come from the same conversion run.
+
+    The foil is part of the name because the chain is scoped to one foil's
+    isotopes while the cross sections are not: one library's neutron directory
+    holds every nuclide ever converted into it, and one chain beside it can
+    only ever be the last foil's.
     """
     if cross_sections is None:
         return None
     if pathlib.Path(cross_sections).name == "neutron":
-        return pathlib.Path(cross_sections).parent / "chain"
+        return pathlib.Path(cross_sections).parent / f"chain-{case}"
     return None
 
 
@@ -93,72 +98,90 @@ def scope_of(chain):
     return set(json.loads((chain / "scope.json").read_text()).get("parents", []))
 
 
-def ensemble_heat(results, material_id, case, volume, steps):
-    """The per-replica decay heat at each cooling step, in uW/g.
+def decay_heat_spread(results, material_id, case, steps, keys):
+    """The nuclear-data sigma on the decay heat at each cooling step, in uW/g.
 
     Decay heat is a function of a whole inventory rather than of one nuclide, so
-    it has to be evaluated once per replica and the spread taken over those,
-    which is what ``get_uncertainty_inventories`` hands back. Building it out of
-    per-nuclide sigmas instead would be summing in quadrature over nuclides that
-    are not independent: a parent and its daughter move together under the same
-    resampled cross section, and the resampling exists precisely so that does
-    not have to be assumed away.
+    the spread has to be taken over the ensemble's inventories rather than
+    assembled from per-nuclide sigmas. A parent and its daughter move together
+    under one resampled cross section, and adding their sigmas in quadrature
+    would claim the independence the resampling exists precisely to avoid
+    assuming.
 
-    Returns one array of replica totals and one dict of replica series per
-    nuclide, both already scaled to uW/g, or ``None`` if the solve carried no
-    ensemble.
+    yani does that itself. ``get_decay_heat_uncertainty`` evaluates the heat once
+    per replica and hands back the ensemble's sample standard deviation beside
+    the unperturbed value, which is the same statistic this used to build by
+    rebuilding a Material per replica out of ``get_uncertainty_inventories`` and
+    taking ``np.std(..., ddof=1)`` over the totals. Both divide by N - 1, because
+    the quantity wanted is how far the answer moves when the cross sections move
+    within their covariance, which is the width of the ensemble rather than the
+    error on where its centre sits.
+
+    The getter works in watts and needs the material's volume, so everything is
+    scaled here to the uW/g the measurement is published in.
+
+    Returns the sigma on the total at each step and one dict of per-nuclide
+    sigmas per step, both in uW/g, or ``None`` if the solve carried no ensemble.
     """
-    inventories = [results.get_uncertainty_inventories(material_id, step)
-                   for step in steps]
-    if any(sample is None for sample in inventories):
-        return None
+    totals = [results.get_decay_heat_uncertainty(material_id, step)
+              for step in steps]
 
-    # An ensemble can also come back empty, which is what happens when nothing
-    # in the material had covariance to resample from: cross sections converted
-    # before yani 0.11.0, or converted with --no-covariance, carry no
-    # covariance.arrow, and yani then runs zero replicas rather than failing.
-    # A spread over nothing is not zero and is not a number, and taking it
-    # anyway put a bare NaN in the JSON, which is not valid JSON at all. Treat
-    # it as the absence it is; `report_uncertainty` says so and names the fix.
-    if any(len(sample) < 2 for sample in inventories):
+    # ``None`` for a solve run without ``data_uncertainty``, and a ``std_dev``
+    # of ``None`` for one whose ensemble came back under two replicas, which is
+    # what happens when nothing in the material had covariance to resample from:
+    # cross sections converted with --no-covariance, or by a converter old
+    # enough not to have written one, carry no covariance.arrow. A spread over
+    # nothing is not zero and is not a number, and taking it anyway put a bare
+    # NaN in the JSON, which is not valid JSON at all. Treat it as the absence
+    # it is; `report_uncertainty` says so and names the fix.
+    if any(estimate is None or estimate.std_dev is None for estimate in totals):
         return None
 
     scale = 1e6 / case.mass_g
-    totals, by_nuclide = [], []
-    for step_samples in inventories:
-        step_totals, step_nuclides = [], []
-        for densities in step_samples:
-            state = yani.Material.from_atom_densities(
-                densities, volume=volume, temperature=TEMPERATURE)
-            contributions = state.decay_heat(by_nuclide=True)
-            step_totals.append(sum(contributions.values()) * scale)
-            step_nuclides.append({n: w * scale for n, w in contributions.items()})
-        totals.append(step_totals)
-        by_nuclide.append(step_nuclides)
-    return np.array(totals, dtype=float), by_nuclide
+    by_nuclide = []
+    for step in steps:
+        per_nuclide = results.get_decay_heat_uncertainty(
+            material_id, step, by_nuclide=True)
+        # Keyed over the same nuclides the breakdown carries, so a product the
+        # ensemble never made lines up with a zero rather than dropping out of
+        # the JSON on some steps and not others.
+        by_nuclide.append({
+            key: (per_nuclide[key].std_dev or 0.0) * scale if key in per_nuclide
+            else 0.0
+            for key in keys
+        })
+    return (np.array([estimate.std_dev * scale for estimate in totals]),
+            by_nuclide)
 
 
-def spread(samples, keys=None):
-    """Standard deviation over an ensemble: the sigma on the value, not on its mean.
+def rate_coverage(info, edge_rates):
+    """Share of the production this solve actually drove that carries a sigma.
 
-    The quantity wanted is how far the answer moves when the cross sections move
-    within their covariance, which is the width of the ensemble. Dividing by
-    root-N would give the error on where its centre sits, which is a statement
-    about how many replicas were run and shrinks to nothing if enough are.
+    The count of nuclides with MF=33 is the wrong question, and tungsten is where
+    that becomes obvious. ENDF/B-VIII.1 states covariance for all five natural W
+    isotopes, so "5 of 5" is true and reads as complete, but what it states it
+    for is ``(n,3n)`` and ``(n,gamma)``: the ``W186(n,2n)W185m`` that makes 98%
+    of this foil's decay heat has no covariance at all. The ensemble then
+    perturbs almost nothing and reports a spread of 0.02%, which is the most
+    confident number on the page and the least earned.
 
-    ``ddof=1`` because these are samples of that distribution and not the
-    population: with the replica count left to converge rather than fixed the
-    difference is small, but the biased estimator would read as a slightly
-    tighter answer than the sampling supports.
+    So the honest measure is weighted by rate rather than counted by nuclide:
+    of all the production this irradiation drove, how much of it went through a
+    channel the covariance actually spans. ``rate_fraction_covered`` gives the
+    share per channel, which is not always 1 even for a channel that has
+    covariance, since the covariance grid can stop short of the spectrum.
+
+    Returns a fraction in [0, 1], or None if there is nothing to weigh.
     """
-    if keys is None:
-        return np.std(samples, axis=1, ddof=1)
-    return [{key: float(np.std([sample.get(key, 0.0) for sample in step], ddof=1))
-             for key in keys}
-            for step in samples]
+    covered = info.get("rate_fraction_covered") or {}
+    total = sum(rate for _p, _k, _t, rate in edge_rates)
+    if not total:
+        return None
+    return sum(rate * covered.get(f"{parent} {kind}", 0.0)
+               for parent, kind, _target, rate in edge_rates) / total
 
 
-def report_uncertainty(info, relative):
+def report_uncertainty(info, relative, edge_rates=()):
     """What the sigma covered, printed under the C/E it qualifies.
 
     A sigma is only readable next to what it left out. A zero on a nuclide whose
@@ -197,6 +220,18 @@ def report_uncertainty(info, relative):
     perturbed = info.get("perturbed") or []
     missing = info.get("no_covariance_data") or []
     lines.append(f"{len(perturbed)} nuclides perturbed from MF=33 covariance")
+
+    # Beside the count, the share of the production it actually reaches. A
+    # library can state covariance for every isotope in the foil and still say
+    # nothing about the one channel carrying the heat, and then the count reads
+    # as coverage the sigma does not have.
+    fraction = rate_coverage(info, edge_rates)
+    if fraction is not None:
+        lines.append(f"covering {fraction * 100:.1f}% of the production rate "
+                     f"this irradiation drove"
+                     + ("" if fraction > 0.9 else
+                        ", so the sigma above is a spread over that part alone"))
+
     if missing:
         # Not a failure and not a warning to be silenced: it is the reason a
         # product can come back with a sigma of zero, which otherwise reads as
@@ -204,6 +239,11 @@ def report_uncertainty(info, relative):
         lines.append(f"nothing published for {' '.join(sorted(missing))}, so "
                      f"reactions on them contribute no sigma")
 
+    # A resampled rate that came out negative is truncated at zero rather than
+    # used, which is right (a negative reaction rate is not a physical draw) and
+    # is not free: the truncated draws are all on one side, so the ensemble mean
+    # sits above the unperturbed value. Reported when it is common enough to
+    # matter, on the same terms the report page prints it under the table.
     sampled, floored = info.get("rates_sampled") or 0, info.get("rates_floored") or 0
     if sampled and floored / sampled > 0.01:
         lines.append(f"{100.0 * floored / sampled:.1f}% of sampled rates went "
@@ -320,13 +360,11 @@ def run(case, cross_sections, chain, uncertainty=None):
     sigma, by_nuclide_sigma, info = None, None, None
     if uncertainty is not None:
         info = results.data_uncertainty_info
-        ensemble = ensemble_heat(results, material_id, case, material.volume,
-                                 cooling_steps)
+        ensemble = decay_heat_spread(
+            results, material_id, case, cooling_steps,
+            keys=sorted({n for step in breakdown for n in step}))
         if ensemble is not None:
-            totals, per_nuclide = ensemble
-            sigma = spread(totals)
-            by_nuclide_sigma = spread(per_nuclide,
-                                      keys=sorted({n for step in breakdown for n in step}))
+            sigma, by_nuclide_sigma = ensemble
 
     # The rate of every production edge the solve drove, which yani-core 0.9.0
     # hands back and earlier versions computed and threw away
@@ -509,8 +547,8 @@ def main():
                              "(default: data/<source>/neutron)")
     parser.add_argument("--chain", type=pathlib.Path, default=None,
                         help="branching subsection from convert_to_arrow.py "
-                            "(default: data/<source>/chain, or the sibling of "
-                            "--cross-sections when it ends with /neutron)")
+                            "(default: data/<source>/chain-<case>, or the sibling "
+                            "of --cross-sections when it ends with /neutron)")
     parser.add_argument("--output", type=pathlib.Path, default=None,
                         help="where the results go (default: results/<source>)")
     parser.add_argument("--list", action="store_true",
@@ -539,9 +577,9 @@ def main():
     if args.cross_sections is None:
         args.cross_sections = HERE / "data" / source / "neutron"
     if args.chain is None:
-        args.chain = inferred_chain_path(args.cross_sections)
+        args.chain = inferred_chain_path(args.cross_sections, args.case)
         if args.chain is None:
-            args.chain = HERE / "data" / source / "chain"
+            args.chain = HERE / "data" / source / f"chain-{args.case}"
     if args.output is None:
         args.output = HERE / "results" / source
 
@@ -610,7 +648,7 @@ def main():
           f"mean deviation {metrics['mean_deviation_percent']:.1f}%, "
           f"measurement sigma {metrics['median_measurement_sigma_percent']:.1f}%")
     if info is not None:
-        report_uncertainty(info, relative)
+        report_uncertainty(info, relative, edge_rates)
 
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / f"fns_{case.name}_{case.experiment}.json").write_text(json.dumps({

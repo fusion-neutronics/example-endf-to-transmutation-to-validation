@@ -190,27 +190,23 @@ def scan(endf_dir, wanted):
     return found
 
 
-def split_nuclide(nuclide):
-    """"Ta180_m1" -> ("Ta", 180, "1"), and "Fe56" -> ("Fe", 56, "").
-
-    One place that knows how a nuclide name comes apart, because stripping the
-    digits off "Ta180_m1" leaves "Ta180_m" rather than the element, and every
-    caller that wants the symbol would otherwise have to remember that.
-    """
-    base, _, state = nuclide.partition("_m")
-    symbol = base.rstrip("0123456789")
-    return symbol, int(base[len(symbol):]), state
-
-
 def tendl_name(nuclide):
     """"Fe56" -> "n-Fe056.tendl", TENDL's own file naming.
 
     An isomer keeps its state on the end, as TENDL writes it: "Ta180_m1" ->
-    "n-Ta180m.tendl". Asking for the ground state under the isomer's name would
-    quietly convert the wrong evaluation.
+    "n-Ta180m.tendl", and a second metastable state as "m2". Asking for the
+    ground state under the isomer's name would quietly convert the wrong
+    evaluation.
+
+    The name comes apart with `yani.data.split_nuclide`, which is where that
+    belongs: stripping the digits off "Ta180_m1" leaves "Ta180_m" and a mass
+    number of 1, and natural tantalum really does contain Ta180m, so this file
+    used to carry its own splitter to avoid exactly that. yani exposes the one
+    the rest of the network already uses, so the two cannot disagree about what
+    a name means.
     """
-    symbol, mass, state = split_nuclide(nuclide)
-    suffix = "m" * bool(state) + (state if state not in ("", "1") else "")
+    symbol, mass, state = yani.data.split_nuclide(nuclide)
+    suffix = "" if not state else "m" + ("" if state == 1 else str(state))
     return f"n-{symbol}{mass:03d}{suffix}.tendl"
 
 
@@ -419,7 +415,7 @@ def main():
                              "(default: data/<source>/neutron)")
     parser.add_argument("--chain", type=pathlib.Path, default=None,
                         help="where the branching and reaction subsections go "
-                             "(default: data/<source>/chain)")
+                             "(default: data/<source>/chain-<case>)")
     parser.add_argument("--tarball", type=pathlib.Path,
                         help="local TENDL-n.tgz, used only without --endf-dir")
     parser.add_argument("--temperature", type=float, default=294.0, help="Kelvin (default: 294)")
@@ -469,8 +465,16 @@ def main():
     work_dir = HERE / "data" / source
     if args.output is None:
         args.output = work_dir / "neutron"
+    # The cross sections are per nuclide and can share one directory: converting
+    # W after Fe adds W180.arrow beside Fe56.arrow and takes nothing away. The
+    # chain cannot, because it is scoped to one foil's isotopes (see
+    # `write_scope`), so a second foil's chain written to the same path replaces
+    # the first one's rather than adding to it. Filing it under the foil is what
+    # lets one library serve both: with a shared path, converting Fe silently
+    # left the W chain unrunnable, and the W runs then failed against a chain
+    # built for Fe54 Fe56 Fe57 Fe58.
     if args.chain is None:
-        args.chain = work_dir / "chain"
+        args.chain = work_dir / f"chain-{args.case}"
     print(f"SOURCE: {source} (data/{source}, results/{source})")
 
     if endf_dir is not None:
@@ -488,7 +492,7 @@ def main():
     for name, abundance in wanted.items():
         target = out_dir / f"{name}.arrow"
         print(f"{name}: NJOY at {args.temperature:g} K "
-              f"({abundance:.4g}% of natural {split_nuclide(name)[0]}) ...", flush=True)
+              f"({abundance:.4g}% of natural {yani.data.split_nuclide(name)[0]}) ...", flush=True)
         start = time.perf_counter()
         yani.convert_neutron_xs(
             input_path=str(sources[name]),
