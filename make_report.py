@@ -635,12 +635,18 @@ def rate_coverage(result):
     JEFF-4.0 both state covariance for all five natural tungsten isotopes, and
     what they state it for is ``(n,3n)`` and ``(n,gamma)``; the
     ``W186(n,2n)W185m`` carrying 98% of the foil's decay heat has none. The
-    ensemble then perturbs 4.8% of the production and reports 0.02% on the
+    ensemble then perturbs 5.6% of the production and reports 0.02% on the
     total, which without this line is the most confident figure in the table.
 
-    Weighted by the rates the solve itself computed, so it is a statement about
-    this irradiation rather than about the evaluation in the abstract: a channel
-    with no covariance costs nothing if nothing went through it.
+    Weighted by the rates the solve itself computed AND by the parent's own
+    density, so it is a statement about this irradiation: a channel with no
+    covariance costs nothing if nothing went through it, and a channel on a
+    trace isotope must not count the same as one on the bulk. Leaving the
+    density out is not a small correction. ENDF/B-VIII.1 publishes MF=33 for
+    Fe54 and Fe56 and not for Fe57 or Fe58, and Fe56 alone is 91.75% of natural
+    iron, so the covered share of an iron foil is 96% weighted and 32%
+    unweighted, which are opposite conclusions about whether its sigma means
+    anything.
 
     Returns a fraction in [0, 1], or None when the result carries no rates or no
     uncertainty to qualify.
@@ -650,11 +656,14 @@ def rate_coverage(result):
     if not info or not edges or uncertainty_of(result) is None:
         return None
     covered = info.get("rate_fraction_covered") or {}
-    total = sum(rate for _p, _k, _t, rate in edges)
+    densities = result.get("initial_atoms_per_barn_cm") or {}
+    weight = [(densities.get(parent, 0.0) * rate,
+               covered.get(f"{parent} {kind}", 0.0))
+              for parent, kind, _target, rate in edges]
+    total = sum(made for made, _fraction in weight)
     if not total:
         return None
-    return sum(rate * covered.get(f"{parent} {kind}", 0.0)
-               for parent, kind, _target, rate in edges) / total
+    return sum(made * fraction for made, fraction in weight) / total
 
 
 def coverage_note(result):
