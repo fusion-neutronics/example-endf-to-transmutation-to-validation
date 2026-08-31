@@ -154,7 +154,7 @@ def decay_heat_spread(results, material_id, case, steps, keys):
             by_nuclide)
 
 
-def rate_coverage(info, edge_rates):
+def rate_coverage(info, edge_rates, densities):
     """Share of the production this solve actually drove that carries a sigma.
 
     The count of nuclides with MF=33 is the wrong question, and tungsten is where
@@ -165,23 +165,33 @@ def rate_coverage(info, edge_rates):
     perturbs almost nothing and reports a spread of 0.02%, which is the most
     confident number on the page and the least earned.
 
-    So the honest measure is weighted by rate rather than counted by nuclide:
-    of all the production this irradiation drove, how much of it went through a
-    channel the covariance actually spans. ``rate_fraction_covered`` gives the
-    share per channel, which is not always 1 even for a channel that has
-    covariance, since the covariance grid can stop short of the spectrum.
+    So the honest measure is weighted by what each channel actually made rather
+    than counted by nuclide: of all the production this irradiation drove, how
+    much went through a channel the covariance spans. ``rate_fraction_covered``
+    gives the share per channel, which is not always 1 even for a channel that
+    has covariance, since the covariance grid can stop short of the spectrum.
+
+    Weighted by the parent's own density as well as by its rate, because an edge
+    rate is per atom of its parent and production is not. Leaving the density
+    out counts a channel on a trace isotope the same as one on the bulk, and on
+    iron that is the difference between a right answer and a wrong one:
+    ENDF/B-VIII.1 publishes MF=33 for Fe54 and Fe56 and not for Fe57 or Fe58, and
+    Fe56 alone is 91.75% of natural iron, so the covered share is 96% rather than
+    the 32% an unweighted count of channels gives.
 
     Returns a fraction in [0, 1], or None if there is nothing to weigh.
     """
     covered = info.get("rate_fraction_covered") or {}
-    total = sum(rate for _p, _k, _t, rate in edge_rates)
+    weight = [(densities.get(parent, 0.0) * rate,
+               covered.get(f"{parent} {kind}", 0.0))
+              for parent, kind, _target, rate in edge_rates]
+    total = sum(made for made, _fraction in weight)
     if not total:
         return None
-    return sum(rate * covered.get(f"{parent} {kind}", 0.0)
-               for parent, kind, _target, rate in edge_rates) / total
+    return sum(made * fraction for made, fraction in weight) / total
 
 
-def report_uncertainty(info, relative, edge_rates=()):
+def report_uncertainty(info, relative, edge_rates=(), densities=None):
     """What the sigma covered, printed under the C/E it qualifies.
 
     A sigma is only readable next to what it left out. A zero on a nuclide whose
@@ -225,7 +235,7 @@ def report_uncertainty(info, relative, edge_rates=()):
     # library can state covariance for every isotope in the foil and still say
     # nothing about the one channel carrying the heat, and then the count reads
     # as coverage the sigma does not have.
-    fraction = rate_coverage(info, edge_rates)
+    fraction = rate_coverage(info, edge_rates, densities or {})
     if fraction is not None:
         lines.append(f"covering {fraction * 100:.1f}% of the production rate "
                      f"this irradiation drove"
@@ -648,7 +658,7 @@ def main():
           f"mean deviation {metrics['mean_deviation_percent']:.1f}%, "
           f"measurement sigma {metrics['median_measurement_sigma_percent']:.1f}%")
     if info is not None:
-        report_uncertainty(info, relative, edge_rates)
+        report_uncertainty(info, relative, edge_rates, initial_atoms)
 
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / f"fns_{case.name}_{case.experiment}.json").write_text(json.dumps({
