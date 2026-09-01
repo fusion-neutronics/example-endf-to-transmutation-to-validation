@@ -265,36 +265,41 @@ W/2000exp_5min against TENDL-2025 they come out at 122.0% and 105.14, against
 calculation's own uncertainty, because neither does in the published definition;
 that number is in the column beside the value it belongs to instead.
 
-`--chain` is optional and only the pathway page depends on it, but prefer the
-library's own chain over a generic one: the isomeric branching that step 1
-writes to `branching/` is what puts `W186(n,2n)W185m` on the page, and on a
-tungsten foil that one path is 98% of the decay heat.
+`--chain` is optional and now supplies only the half-lives in the `T1/2` column.
+The routes and the branching used to come from it too, and come from the result
+instead, so a report whose chain has moved on is no longer a report whose
+pathway page quietly changes.
 
 Routes are whole strings, `W186(n,2n)W185m(IT)W185`, one neutron reaction off an
-isotope of the foil and then the decay steps that carry the product on. They are
-walked from the foil's own isotopes rather than across the whole chain: asking
-the chain what makes W187 answers with `Os190(n,a)` and `Ir192(n,npa)` as
+isotope of the foil and then the decay steps that carry the product on. **yani
+works them out, not this repo.** Step 2 asks
+`TransmutationResults.get_production_routes` and files the answer beside the
+heat; step 5 binds it. That matters because a route is a statement about the
+rates a solve ran with as much as about the topology, and deriving it later
+means loading the chain a second time and hoping it is the one that produced the
+numbers.
+
+They are walked from the foil's own isotopes rather than across the whole chain:
+asking the chain what makes W187 answers with `Os190(n,a)` and `Ir192(n,npa)` as
 readily as `W186(n,gamma)`, and nothing in a tungsten foil is osmium. One
-reaction step by default, which is what the published pages carry; decay steps
-are followed regardless, since a decay is not a fluence-dependent step.
+reaction step, which is what the published pages carry, and then up to three
+decay steps.
 
-Without the per-edge rates the order of the routes into one product is fewest
-steps first and then by name, and it deliberately claims nothing more. An
-earlier version sorted by the
-natural abundance of the isotope a route starts from, which put
-`W184(n,gamma)W185m` above `W186(n,2n)W185m` because W184 is the more abundant
-isotope. That is backwards in a 14 MeV spectrum, and W185m is 98% of the decay
-heat, so the heuristic was wrong on the one row a reader looks at first.
-Abundance was standing in for the rate, and the rate is now available, so the
-routes are ordered by the real thing.
+"Path %" is the share of a product's production arriving down each route: the
+atoms the route starts from, times what its reaction drove per atom of its
+parent over the irradiation, times the branching of every decay it passes
+through. A route through a 1% decay branch delivers 1% of what the reaction
+made. Each further reaction step carries the step duration too, so a two-step
+route is in the same units as a one-step one and comes out smaller by roughly a
+factor of the fluence, which on a 5 minute irradiation at 1e10 n/cm2/s is parts
+in a billion.
 
-"Path %" is that real thing: the share of a product's production arriving down
-each route, from the per-edge rates yani-core 0.9.0 hands back
-(`TransmutationResults.get_reaction_rates`). A route's weight is the atoms of
-the parent it starts from times the production its opening reaction drove per
-atom, which is first order in the fluence and so valid over these irradiations.
-Decay steps do not enter, because a decay moves what the reaction made rather
-than making more of it.
+The **flux-weighted isomeric branching** comes from the same place,
+`get_isomeric_branching`, and is the number that says whether a disagreement
+belongs to a cross section or to a branching ratio. It is not in the chain file:
+the dominant tungsten channel carries a placeholder `0.0` there, which the
+energy-dependent overlay replaces at solve time with the 53.5/46.5 the spectrum
+actually gives.
 
 Routes carrying under 0.1% of their product are left off the page and counted
 in the note under it. A route that made a thousandth of a product says nothing
