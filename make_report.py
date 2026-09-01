@@ -270,60 +270,61 @@ def element_name(case):
     return yani.data.element_names().get(case, case).title()
 
 
-def read_chain(chain, decay=DECAY_LIBRARY, cache=CACHE):
-    """The chain, with a decay subsection borrowed if it has none of its own.
+def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
+    """Half-lives for the ``T1/2`` column, in seconds, keyed by nuclide.
 
-    convert_to_arrow.py writes a chain as ``reactions/`` and ``branching/``, and
-    leaves decay data to the converted sublibrary in the cache, which is why
-    run_transmutation.py points two settings at two places. TransmutationChain
-    wants one directory holding all of it, so when the chain has no ``decay/``
-    of its own it is composed here: the chain's own subsections, plus a decay
-    subsection linked in from the cache.
+    The one thing this report still needs a chain for. Routes and isomeric
+    branching used to come from one too, walked and weighted here; yani derives
+    both from the solve now and step 2 files them, so the topology and the
+    branching overlay are no longer read at report time at all.
 
-    Composing it rather than falling back to the cache's own chain is the whole
-    point. The cached chain's topology sends every (n,2n) to a ground state,
-    because the isomeric branching is energy dependent and lives in the
-    ``branching/`` subsection the converter wrote. Without it W186(n,2n)W185m
-    does not exist, and on a tungsten foil that is 98% of the decay heat.
+    That is what makes this small. Half-lives live entirely in the decay
+    subsection, so the decay sublibrary alone answers it, and the library's own
+    chain need not be found. Composing all four subsections used to be the whole
+    point of this function -- the cached chain's topology sends every (n,2n) to a
+    ground state, and without the converter's ``branching/`` overlay
+    W186(n,2n)W185m does not exist, which on a tungsten foil is 98% of the decay
+    heat. That mattered when the routes were walked here. It does not now.
+
+    ``TransmutationChain`` wants a directory with a manifest and its subsections
+    beneath it, and the cache holds the decay subsection's contents rather than a
+    chain root, so one symlink and a manifest stand it up. `chain` overrides all
+    of it, for a chain that carries its own ``decay/``.
+
+    Returns the mapping and the temporary directory to clean up, or ``({}, None)``
+    when there is nothing to read: the column is then left blank, which is what
+    it did before and is better than a report that refuses to build over it.
     """
-    if chain is None:
-        return None, None
     try:
         import yani
 
-        if (chain / "decay").is_dir():
-            return yani.TransmutationChain(str(chain)), None
+        if chain is not None and (chain / "decay").is_dir():
+            print(f"half-lives: {chain}")
+            return dict(yani.TransmutationChain(str(chain)).half_lives), None
 
         borrowed = cache / f"{decay}-transmutation-decay.arrow"
         if not borrowed.is_dir():
-            print(f"chain: {chain} has no decay/ and {borrowed} is not there "
-                  f"either, so half-lives and pathways are unavailable.\n"
-                  f"       Convert the decay sublibrary first, or pass --chain a "
-                  f"directory that has its own decay/.")
-            return None, None
+            print(f"half-lives: {borrowed} is not there, so the T1/2 column is "
+                  f"left blank.\n"
+                  f"            Convert the decay sublibrary first, or pass "
+                  f"--chain a directory that has its own decay/.")
+            return {}, None
 
         # Held open for as long as the chain is read, and removed after.
-        composed = tempfile.TemporaryDirectory(prefix="yani-report-chain-")
+        composed = tempfile.TemporaryDirectory(prefix="yani-report-decay-")
         root = pathlib.Path(composed.name)
-        subsections = {"decay": borrowed}
-        for name in ("reactions", "branching", "fission_yields"):
-            if (chain / name).is_dir():
-                subsections[name] = (chain / name).resolve()
-        for name, target in subsections.items():
-            (root / name).symlink_to(target, target_is_directory=True)
+        (root / "decay").symlink_to(borrowed.resolve(), target_is_directory=True)
         (root / "manifest.json").write_text(json.dumps({
             "format_version": 2,
-            "library": f"{chain.name}+{decay}",
-            "subsections": {name: {"path": name} for name in subsections},
+            "library": decay,
+            "subsections": {"decay": {"path": "decay"}},
         }))
-        loaded = yani.TransmutationChain(str(root))
-        print(f"chain: {chain} with decay from {borrowed.name} "
-              f"({', '.join(sorted(subsections))})")
+        loaded = dict(yani.TransmutationChain(str(root)).half_lives)
+        print(f"half-lives: {len(loaded)} from {borrowed.name}")
         return loaded, composed
-    except Exception as error:  # noqa: BLE001 - both pages that use it are optional
-        print(f"chain: unreadable at {chain} ({error}). Half-lives and pathways "
-              f"are left out.")
-        return None, None
+    except Exception as error:  # noqa: BLE001 - the column is optional
+        print(f"half-lives: unreadable ({error}). The T1/2 column is left blank.")
+        return {}, None
 
 
 def edge_weights(result):
@@ -571,34 +572,6 @@ def discover_libraries(case, experiments, results_root):
             f"  python convert_to_arrow.py --case {case}\n"
             f"  python run_transmutation.py --case {case}")
     return found
-
-
-def discover_chain(libraries, data_root, case):
-    """The chain convert_to_arrow.py wrote beside one of these libraries' cross sections.
-
-    Named for the foil as well as the library, because a chain is scoped to one
-    foil's isotopes: ``data/tendl-2025/chain-W`` is not a chain that can answer
-    anything about iron. A shared path made converting the second foil quietly
-    replace the first foil's chain, which left this page walking routes from
-    tungsten through a topology built for Fe54 Fe56 Fe57 Fe58 and finding none.
-
-    The primary library's own is preferred, and that is not a nicety: its
-    ``branching/`` is the energy-dependent overlay, and without it the dominant
-    tungsten channel takes the chain file's placeholder and W185m goes from 98%
-    of the decay heat to 10%.
-
-    Falling back to another library on the report is still worth doing. A result
-    can outlive the conversion it came from, and the pathway page mostly asks
-    the chain for topology and half-lives, which the libraries agree on far
-    better than they agree on the branching. Returns which library it came from
-    so the caller can say, because a chain quietly borrowed from the library the
-    page is not about is exactly the kind of thing that should be said out loud.
-    """
-    for library in libraries:
-        chain = data_root / library / f"chain-{case}"
-        if chain.is_dir():
-            return chain, library
-    return None, None
 
 
 def load_results(case, experiment, libraries, results_root):
@@ -1684,8 +1657,7 @@ def build(case, experiments, libraries, results_root, chain, decay, out,
     """
     sections = [(experiment, load_results(case, experiment, libraries, results_root))
                 for experiment in experiments]
-    loaded, composed = read_chain(chain, decay)
-    half_lives = dict(loaded.half_lives) if loaded else {}
+    half_lives, composed = half_lives_from(decay, chain)
 
     # The routes come with each result, because they are a statement about the
     # rates that result was solved with as much as about the topology. Each
@@ -1769,16 +1741,10 @@ def main():
     parser.add_argument("--results", type=pathlib.Path, default=HERE / "results",
                         help="root the sweeps were filed under (default: results/)")
     parser.add_argument("--chain", type=pathlib.Path, default=None,
-                        help="chain directory convert_to_arrow.py wrote, for "
-                             "half-lives and the pathway page. Its branching/ is "
-                             "what puts isomers on the page, so prefer the "
-                             "library's own over a generic chain. Default: "
-                             "data/<primary library>/chain-<case> if it is "
-                             "there, and without it those columns are left out")
-    parser.add_argument("--data", type=pathlib.Path, default=HERE / "data",
-                        help="root convert_to_arrow.py filed its conversions "
-                             "under, searched for the default --chain "
-                             "(default: data/)")
+                        help="a chain directory carrying its own decay/, to take "
+                             "the T1/2 column from instead of --decay. Only "
+                             "half-lives are read from it: the routes and the "
+                             "isomeric branching come with the results")
     parser.add_argument("--decay", default=DECAY_LIBRARY,
                         help="decay sublibrary supplying half-lives when --chain has "
                              f"no decay/ of its own (default: {DECAY_LIBRARY})")
@@ -1827,14 +1793,6 @@ def main():
             print(f"libraries: {', '.join(libraries)}, primary {libraries[0]} "
                   f"(found under {args.results})")
 
-        chain = args.chain
-        if chain is None:
-            chain, from_library = discover_chain(libraries, args.data, case)
-            if chain is not None and from_library != libraries[0]:
-                print(f"chain: taken from {from_library}, which is not the primary "
-                      f"library. Its isomeric branching is {from_library}'s, not "
-                      f"{libraries[0]}'s")
-
         # Named for the foil, because that is what the document is about. The
         # experiment only reaches the filename when one was asked for by name,
         # where it is the whole of what distinguishes the file.
@@ -1842,7 +1800,7 @@ def main():
                 and len(args.experiments) == 1 else case)
         out = args.output or (args.results / f"report_{stem}.pdf")
         written = build(case, experiments, libraries, args.results,
-                        chain, args.decay, out, args.title,
+                        args.chain, args.decay, out, args.title,
                         args.subtitle)
         print()
         for path in written:
