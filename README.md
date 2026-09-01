@@ -238,8 +238,8 @@ which campaigns, which libraries and which chain are all read off what is on
 disk. `--case` picks foils, `--experiments` picks campaigns, and naming exactly
 one campaign puts it back in the filename as `report_<case>_<experiment>.pdf`.
 
-Every column the published reports carry is now on the page, `+/- 6%` and
-`%ΔCnuc` included. A result filed before those existed is still readable: the
+The calculation's own uncertainty is on the page beside its value, `+/- 6%` and
+`%ΔCnuc` both. A result filed before those existed is still readable: the
 two uncertainty columns are left empty rather than filled with a zero, which
 would be a different claim.
 
@@ -256,12 +256,11 @@ the page's caps applied, and `report_<case>_ce.csv`, which carries the C/E
 tables alone, one row per campaign per cooling point. A PDF is where this report
 is read and a poor place to get a number back out of.
 
-The table's two figures of merit are the published ones, the mean of
+The table's two figures of merit are the conventional ones, the mean of
 `|C/E - 1|` and a mean chi-squared against the measurement's own sigma, which is
 what says whether a deviation is larger than the experiment can resolve. On
-W/2000exp_5min against TENDL-2025 they come out at 122.0% and 105.14, against
-122 and 105.24 in the UKAEA decay heat validation report. Neither carries the
-calculation's own uncertainty, because neither does in the published definition;
+W/2000exp_5min against TENDL-2025 they come out at 122.0% and 105.14. Neither
+carries the calculation's own uncertainty, because neither does by definition;
 that number is in the column beside the value it belongs to instead.
 
 The report needs no chain. Routes and isomeric branching come with the results,
@@ -345,9 +344,9 @@ is what it always was: `--no-uncertainty` reproduces the old bare value exactly,
 and the whole ensemble costs about a second.
 
 On W/2000exp_5min against TENDL-2025 the calculated heat comes out good to 5.5%
-in the median, 4.3% to 6.1% over the cooling points, against the `+/- 6%` falling
-to `+/- 4%` the published table carries for the same foil. `%ΔCnuc` on W185m
-comes out at 6%, which is what the report prints.
+in the median, 4.3% to 6.1% over the cooling points, and `%ΔCnuc` on W185m comes
+out at 6%. Both are printed beside the value they qualify, so a deviation is
+never read without them.
 
 Two things about that number are worth knowing before it is used.
 
@@ -476,10 +475,10 @@ python convert_to_arrow.py --endf-dir /path/to/endfb-8.1 --library endf-b8.1 \
 python run_transmutation.py --cross-sections data/b81 --output results/b81
 ```
 
-### Against the published tables
+### Four libraries at once
 
-The UKAEA decay-heat validation report carries the same foil against four
-libraries, and all four are reproducible here from ENDF on your own machine:
+The same foil against as many libraries as you have, each converted from its own
+ENDF on your own machine:
 
 ```bash
 for lib in tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0; do
@@ -489,30 +488,30 @@ done
 python make_report.py --case W --libraries tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0
 ```
 
-`--libraries` fixes the column order; without it the report picks its own and
-still makes TENDL-2025 primary. Tungsten on `2000exp_5min`, our figures of merit
-beside the published ones:
+`--libraries` fixes the column order and which library is primary; without it the
+report picks its own. Tungsten on `2000exp_5min`, against a measurement whose own
+median sigma is 13.1%:
 
-| library | mean % diff (pub) | ours | mean chi2 (pub) | ours |
+| library | median C/E | mean deviation | mean chi2 | data sigma |
 |---|---|---|---|---|
-| tendl-2025 | 122 | **122** | 105.24 | **105.14** |
-| jeff-4.0 | 79 | **79** | 43.56 | **42.81** |
-| endf-b8.1 | 77 | **79** | 41.20 | **42.81** |
-| jendl-5.0 | 69 | **72** | 35.51 | **37.05** |
+| tendl-2025 | 2.355 | 122.0% | 105.14 | 5.5% |
+| jeff-4.0 | 1.805 | 78.9% | 42.81 | <0.1% |
+| endf-b8.1 | 1.805 | 78.9% | 42.81 | <0.1% |
+| jendl-5.0 | 1.669 | 71.7% | 37.05 | none |
 
-and on `1996exp_7hour`, 21/20, 27/28, 27/28 and 19/23. The E/C columns agree
-point by point to within 0.01 to 0.03 nearly everywhere.
+Every one of them is further from the measurement than any of them is from the
+others, which is the useful shape of that table: this is a disagreement about
+tungsten, not about which library to pick.
 
-One row is worth reading twice. Our JEFF-4.0 and ENDF/B-VIII.1 tungsten results
-are **identical**, where the published table has them a little apart. That is
-not a mix-up at this end: JEFF-4.0 adopted ENDF/B-VIII.1's tungsten wholesale,
-and the two files on disk agree byte for byte over MF=2, MF=3, MF=8 and MF=33.
-What differs is MF=1, which is descriptive text, and one endpoint of the MF=10
-grid at 150 MeV, an order of magnitude in energy above the 14 MeV a D-T source
-produces and outside this spectrum entirely. Identical inputs give identical
-outputs, and the converted `nuclide.arrow` files hash the same. Where two
-libraries carry one evaluation, a comparison that shows them differing is
-reporting something other than the data.
+One row is worth reading twice. JEFF-4.0 and ENDF/B-VIII.1 come out **identical**,
+to the digit, and that is a fact about the evaluations rather than a coincidence:
+JEFF-4.0 adopted ENDF/B-VIII.1's tungsten wholesale. The two files on disk agree
+byte for byte over MF=2, MF=3, MF=8 and MF=33. What differs is MF=1, which is
+descriptive text, and one endpoint of the MF=10 grid at 150 MeV, an order of
+magnitude in energy above the 14 MeV a D-T source produces and outside this
+spectrum entirely. The converted `nuclide.arrow` files hash the same. Two
+libraries carrying one evaluation give one answer, and anything that shows them
+apart is reporting something other than the data.
 
 ### What else comes out of the same evaluations
 
