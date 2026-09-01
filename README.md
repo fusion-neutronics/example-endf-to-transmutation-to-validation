@@ -247,8 +247,7 @@ would be a different claim.
 absolute values the table carries:
 
 ```bash
-python make_report.py --case W --libraries tendl-2025 tendl-2017 \
-    --chain data/tendl-2025/chain-W
+python make_report.py --case W --libraries tendl-2025 tendl-2017
 ```
 
 Beside the PDF go the same tables in a form something else can read:
@@ -265,10 +264,15 @@ W/2000exp_5min against TENDL-2025 they come out at 122.0% and 105.14, against
 calculation's own uncertainty, because neither does in the published definition;
 that number is in the column beside the value it belongs to instead.
 
-`--chain` is optional and now supplies only the half-lives in the `T1/2` column.
-The routes and the branching used to come from it too, and come from the result
-instead, so a report whose chain has moved on is no longer a report whose
+The report needs no chain. Routes and isomeric branching come with the results,
+and the only thing left that a chain could answer is the `T1/2` column, which is
+half-lives and so lives entirely in the decay sublibrary the run already used.
+That is read straight from the cache, so there is no library chain to find and
+none to go stale: a report whose chain has moved on is no longer a report whose
 pathway page quietly changes.
+
+`--chain` remains for a chain that carries its own `decay/`, and `--decay` names
+the sublibrary otherwise. Neither is needed for the common case.
 
 Routes are whole strings, `W186(n,2n)W185m(IT)W185`, one neutron reaction off an
 isotope of the foil and then the decay steps that carry the product on. **yani
