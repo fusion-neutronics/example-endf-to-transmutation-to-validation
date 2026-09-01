@@ -14,8 +14,20 @@ isotopes one foil needs, which is a reasonable trade once and a terrible one
 73 times.
 
 Both scripts are called as they would be by hand, so a foil that fails is
-reported and the sweep carries on. Conversion runs each time, so a second run
-rebuilds every foil from the same command line.
+reported and the sweep carries on.
+
+Conversion is reused rather than repeated. The 73 foils are made of 255 distinct
+isotopes between them but name 441, because Fe56 belongs to iron, to both steels,
+to Inc600 and to NiCr; convert_to_arrow.py skips an isotope already converted
+under the same library, so the sweep pays for each one once. Pass `--force`
+through to it after changing a conversion setting, which the output cannot be
+distinguished by.
+
+NJOY writes its scratch wherever `TMPDIR` points, and on many Linux systems that
+is `/tmp` on a tmpfs sized against RAM. A sweep is thousands of NJOY runs, so
+point it somewhere on disk first if that is the case here:
+
+    TMPDIR=/var/tmp python sweep_fns.py --endf-dir ...
 
 The table is sorted by mean deviation, worst last, because the point of running
 all of them is to find where the library falls over. Read it alongside

@@ -52,6 +52,7 @@ step 2 then reports a bare value as it used to.
 
 import argparse
 import fnmatch
+import json
 import os
 import pathlib
 import re
@@ -207,6 +208,34 @@ def tendl_name(nuclide):
     symbol, mass, state = yani.data.split_nuclide(nuclide)
     suffix = "" if not state else "m" + ("" if state == 1 else str(state))
     return f"n-{symbol}{mass:03d}{suffix}.tendl"
+
+
+def already_converted(target, library):
+    """True when `target` already holds this library's data for the nuclide.
+
+    NJOY dominates the cost of every step in this repo, and a sweep asks for the
+    same isotope over and over: Fe56 belongs to iron, to both steels, to Inc600
+    and to NiCr, so converting per foil does 441 conversions for the 255 distinct
+    isotopes the 73 FNS foils are made of. Reconverting them is not wrong, it is
+    just hours.
+
+    The stamp is checked, not merely the directory. A conversion filed under a
+    different library is not this one's, and reusing it would be the same class
+    of mistake as reusing another foil's chain: silently right-looking and wrong.
+
+    What this cannot see is a change of conversion SETTINGS. Data converted with
+    --no-covariance looks exactly like data converted with it for a nuclide whose
+    evaluation states no MF=33, so the two cannot be told apart from the output
+    alone. Use --force after changing one; a sweep holds its settings fixed and
+    is the case this exists for.
+    """
+    stamp = target / "version.json"
+    if not stamp.is_file():
+        return False
+    try:
+        return json.loads(stamp.read_text()).get("library") == library
+    except (OSError, ValueError):
+        return False
 
 
 def fetch_tendl(tarball, work_dir, nuclides, library):
@@ -406,6 +435,11 @@ def main():
                         help="skip the isomeric branching subsection")
     parser.add_argument("--no-reactions", action="store_true",
                         help="skip the reaction topology subsection")
+    parser.add_argument("--force", action="store_true",
+                        help="reconvert isotopes already converted under this "
+                             "library rather than reusing them. Needed after "
+                             "changing --temperature or --no-covariance, which "
+                             "the output cannot be distinguished by")
     parser.add_argument("--no-covariance", action="store_true",
                         help="skip the MF=33 cross-section covariance, which is "
                              "what run_transmutation.py puts an uncertainty on "
@@ -476,8 +510,17 @@ def main():
     print(f"LIB:   stamping the output as {args.library!r}")
 
     uncovered = []
+    reused = 0
     for name, abundance in wanted.items():
         target = out_dir / f"{name}.arrow"
+        if not args.force and already_converted(target, args.library):
+            # Still counted for the covariance report below, because whether the
+            # evaluation carried MF=33 is a property of the data and not of when
+            # it was converted.
+            if not args.no_covariance and not (target / "covariance.arrow").is_file():
+                uncovered.append(name)
+            reused += 1
+            continue
         print(f"{name}: NJOY at {args.temperature:g} K "
               f"({abundance:.4g}% of natural {yani.data.split_nuclide(name)[0]}) ...", flush=True)
         start = time.perf_counter()
@@ -506,6 +549,10 @@ def main():
         note = "" if args.no_covariance else (
             ", covariance" if covariance else ", no MF=33 covariance in the evaluation")
         print(f"{name}: {time.perf_counter() - start:.0f} s, {size:.1f} MB{note} -> {target}")
+
+    if reused:
+        print(f"\nREUSE: {reused}/{len(wanted)} isotopes were already converted "
+              f"under {args.library!r} and were left alone (--force to redo them)")
 
     if args.no_covariance:
         print("\nCOV:   skipped, so step 2 reports the decay heat without a sigma")

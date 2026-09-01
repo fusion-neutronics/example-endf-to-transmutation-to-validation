@@ -872,6 +872,93 @@ def cover_page(pdf, case, sections, title, subtitle, number, total):
     plt.close(figure)
 
 
+# Rows of the volume's ranking that fit on one page, after its heading. Measured
+# rather than guessed: the page is A4 at the shared pitch, and a ranking that
+# silently truncated at the fold would be worse than one that runs to two pages.
+SUMMARY_ROWS = 46
+
+
+def volume_cover_page(pdf, cases, libraries, title, subtitle, number, total):
+    """The volume's own cover: what is bound here, and against what."""
+    figure = page(pdf, title, subtitle, number, total)
+    figure.text(0.5, 0.66, "FNS decay heat validation", ha="center", fontsize=24)
+    figure.text(0.5, 0.605, f"{len(cases)} foils", ha="center", fontsize=13,
+                color="#333333")
+    figure.text(0.5, 0.565,
+                "libraries: " + ", ".join(library_label(l) for l in libraries),
+                ha="center", fontsize=9, color="#555555")
+    blurb = (
+        "One foil says whether a handful of cross sections are right. All of them\n"
+        "say whether a library is, which is why they are bound together: the\n"
+        "ranking overleaf is the result, and the per-foil pages behind it are\n"
+        "where a row that looks wrong is explained.")
+    figure.text(0.5, 0.50, blurb, ha="center", va="top", fontsize=9,
+                color="#555555", linespacing=1.6)
+    pdf.savefig(figure)
+    plt.close(figure)
+
+
+def summary_rows(entries):
+    """One ranking row per foil, worst deviation last.
+
+    Ranked on the primary library's mean deviation, and read against the two
+    sigmas beside it rather than on its own: a foil 30% out that was measured to
+    30% is not a disagreement, and neither is one 30% out whose cross sections
+    are known to 30%. Ordered worst last because the point of running every foil
+    is to find where the library falls over, and the end of a list is where the
+    eye stops.
+    """
+    rows = []
+    for case, sections in entries:
+        _experiment, results = sections[0]
+        _name, result = results[0]
+        values = score(result)
+        ratio = np.array(result["ratio"], dtype=float)
+        percent = uncertainty_percent(result)
+        rows.append((values["mean_percent_diff"], [
+            case,
+            f"{len(sections)}",
+            f"{np.nanmedian(ratio):.3f}",
+            f"{values['mean_percent_diff']:.1f}",
+            "-" if percent is None else f"{np.median(percent):.1f}",
+            f"{result['median_measurement_sigma_percent']:.1f}",
+            f"{values['mean_chi2']:.2f}",
+        ]))
+    return [row for _deviation, row in sorted(rows, key=lambda r: r[0])]
+
+
+def summary_pages(pdf, entries, title, subtitle, number, total):
+    """The ranking, over as many pages as it needs. Returns the next number."""
+    columns = [("Foil", "", "l", 1.0),
+               ("campaigns", "", "r", 0.9),
+               ("median C/E", "", "r", 1.0),
+               ("mean % diff", "", "r", 1.0),
+               ("data sigma %", "", "r", 1.1),
+               ("meas. sigma %", "", "r", 1.2),
+               ("mean chi2", "", "r", 0.9)]
+    rows = summary_rows(entries)
+    chunks = [rows[i:i + SUMMARY_ROWS] for i in range(0, len(rows), SUMMARY_ROWS)] or [[]]
+    for index, chunk in enumerate(chunks):
+        figure = page(pdf, title, subtitle, number, total)
+        heading = "Every foil, ranked by mean deviation"
+        if len(chunks) > 1:
+            heading += f" ({index + 1} of {len(chunks)})"
+        figure.text(0.08, 0.905, heading, fontsize=11)
+        bottom = table(figure, columns, chunk, 0.868, left=0.08, right=0.94)
+        if index == len(chunks) - 1:
+            figure.text(0.08, bottom - 0.020,
+                        "Read the deviation against both sigmas beside it. A foil "
+                        "out by more than the\nmeasurement can resolve, or than "
+                        "its own cross sections are known to, is not a\n"
+                        "disagreement the library has to answer for. Each foil's "
+                        "own pages follow, in\nthis order.",
+                        va="top", fontsize=7.2, color="#555555")
+        pdf.savefig(figure)
+        plt.close(figure)
+        number += 1
+    return number
+
+
 def table_page(pdf, case, results, half_lives, title, subtitle, number, total):
     """The C/E table: measured, the primary library's value, then E/C per library.
 
@@ -1647,60 +1734,89 @@ def write_data(out, case, sections, half_lives):
     return [data_path, csv_path]
 
 
-def build(case, experiments, libraries, results_root, chain, decay, out,
-          title, subtitle):
-    """Write the report and return where it went.
+def prepare(case, experiments, libraries, results_root, half_lives):
+    """Everything a foil's pages need, and how many pages that will be.
 
-    One cover, then three pages per experiment. A foil measured more than once
-    belongs in one document: the spread between its experiments is a result, and
-    the published report binds them the same way.
+    Separated from the drawing because the footer says "Page n of N" and N is
+    not known until the routes have been laid out. A volume needs every foil's
+    count before it can draw the first one, so the counting happens here and the
+    drawing in :func:`draw_case`.
     """
     sections = [(experiment, load_results(case, experiment, libraries, results_root))
                 for experiment in experiments]
-    half_lives, composed = half_lives_from(decay, chain)
 
     # The routes come with each result, because they are a statement about the
-    # rates that result was solved with as much as about the topology. Each
-    # experiment therefore carries its own, rather than one walk being shared
-    # across campaigns that sat at different positions in different spectra.
+    # rates that result was solved with as much as about the topology.
     note = None
     if not any(result.get("production_routes")
                for _experiment, results in sections for _library, result in results):
         note = ("These results carry no production routes. They were filed by a "
                 "step 2 older than yani 0.13.0, which is where the routes come "
                 "from; rerun it to fill this page.")
-        print(f"pathways: {note.splitlines()[0]}")
-    else:
-        filed = sections[0][1][0][1].get("production_routes") or {}
-        print(f"pathways: {sum(len(v) for v in filed.values())} routes into "
-              f"{len(filed)} products")
 
-    # Laid out before any page is drawn, because the footer says "of N" and the
-    # routes decide how many pages they need.
     layouts = [pathway_layout(results, note, half_lives)
                for _experiment, results in sections]
-    total = 2 + sum(2 + len(layout["pages"]) for layout in layouts)
+    pages = 1 + sum(2 + len(layout["pages"]) for layout in layouts)
+    return sections, layouts, pages
 
-    # Coloured off the libraries as asked for rather than off the ones any one
-    # campaign happens to carry, so a library missing from one campaign does not
-    # shift every colour after it on that campaign's panel alone.
+
+def draw_case(pdf, case, sections, layouts, colours, half_lives,
+              title, subtitle, number, total):
+    """One foil's pages, into an already-open PDF. Returns the next page number.
+
+    The comparison panel first, then per campaign the C/E table, the pathways
+    and the figures. Takes the page number rather than starting at one, so the
+    same pages sit in a single-foil report or partway through a volume without
+    knowing which they are in.
+    """
+    comparison_page(pdf, case, sections, colours, title, subtitle, number, total)
+    number += 1
+    for (_experiment, results), layout in zip(sections, layouts):
+        table_page(pdf, case, results, half_lives, title, subtitle, number, total)
+        number += 1
+        for index in range(len(layout["pages"])):
+            pathway_page(pdf, case, results[0][0], layout, index,
+                         title, subtitle, number, total)
+            number += 1
+        figure_page(pdf, case, results, title, subtitle, number, total)
+        number += 1
+    return number
+
+
+def report_scores(case, sections):
+    """The per-campaign figures of merit, printed as the report is written."""
+    for experiment, results in sections:
+        for library, result in results:
+            values = score(result)
+            print(f"{case:>8} {experiment:>16} {library:>12}: "
+                  f"mean % diff {values['mean_percent_diff']:6.1f}   "
+                  f"mean chi^2 {values['mean_chi2']:8.2f}   "
+                  f"{len(leading_products(result))} products above "
+                  f"{SHARE_FLOOR * 100:g}% peak share")
+
+
+def build(case, experiments, libraries, results_root, chain, decay, out,
+          title, subtitle):
+    """Write one foil's report and return where it went.
+
+    One cover, then the foil's own pages. A foil measured more than once belongs
+    in one document: the spread between its experiments is a result, and the
+    published report binds them the same way.
+    """
+    half_lives, composed = half_lives_from(decay, chain)
+    sections, layouts, pages = prepare(case, experiments, libraries,
+                                       results_root, half_lives)
+    filed = sections[0][1][0][1].get("production_routes") or {}
+    print(f"pathways: {sum(len(v) for v in filed.values())} routes into "
+          f"{len(filed)} products")
+    total = 1 + pages
     colours = library_colours(libraries)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         cover_page(pdf, case, sections, title, subtitle, 1, total)
-        comparison_page(pdf, case, sections, colours, title, subtitle, 2, total)
-        number = 3
-        for (_experiment, results), layout in zip(sections, layouts):
-            table_page(pdf, case, results, half_lives, title, subtitle,
-                       number, total)
-            number += 1
-            for index in range(len(layout["pages"])):
-                pathway_page(pdf, case, results[0][0], layout, index,
-                             title, subtitle, number, total)
-                number += 1
-            figure_page(pdf, case, results, title, subtitle, number, total)
-            number += 1
+        draw_case(pdf, case, sections, layouts, colours, half_lives,
+                  title, subtitle, 2, total)
         pdf.infodict()["Title"] = f"{title}: {element_name(case)}"
         pdf.infodict()["Subject"] = subtitle
 
@@ -1708,16 +1824,71 @@ def build(case, experiments, libraries, results_root, chain, decay, out,
         composed.cleanup()
 
     written = write_data(out, case, sections, half_lives)
-
-    for experiment, results in sections:
-        for library, result in results:
-            values = score(result)
-            print(f"{experiment:>16} {library:>12}: "
-                  f"mean % diff {values['mean_percent_diff']:6.1f}   "
-                  f"mean chi^2 {values['mean_chi2']:8.2f}   "
-                  f"{len(leading_products(result))} products above "
-                  f"{SHARE_FLOOR * 100:g}% peak share")
+    report_scores(case, sections)
     return [out, *written]
+
+
+def build_volume(cases, libraries, results_root, chain, decay, out,
+                 title, subtitle, experiments=None):
+    """Every foil in one document: cover, ranking, then each foil's pages.
+
+    73 separate PDFs are 73 documents nobody opens. What running every foil buys
+    is the comparison between them, and that only exists as a page if they are
+    bound together. The per-foil pages are unchanged and follow the ranking, so
+    a row that looks wrong is a page turn away from the pathways that explain it.
+
+    A foil with no results is skipped and named rather than failing the volume:
+    on a sweep of 73 there will usually be a few, and losing the other 70 to one
+    of them would be absurd.
+    """
+    half_lives, composed = half_lives_from(decay, chain)
+
+    prepared, skipped = [], []
+    for case in cases:
+        found = experiments or discover_experiments(case, results_root)
+        if not found:
+            skipped.append(case)
+            continue
+        try:
+            sections, layouts, pages = prepare(case, found, libraries,
+                                               results_root, half_lives)
+        except SystemExit as error:
+            print(f"{case}: skipped ({error})")
+            skipped.append(case)
+            continue
+        prepared.append((case, sections, layouts, pages))
+
+    if not prepared:
+        raise SystemExit(f"no foil under {results_root} has results to bind.")
+
+    entries = [(case, sections) for case, sections, _l, _p in prepared]
+    ranking = max(1, -(-len(entries) // SUMMARY_ROWS))
+    total = 1 + ranking + sum(pages for _c, _s, _l, pages in prepared)
+    colours = library_colours(libraries)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(out) as pdf:
+        volume_cover_page(pdf, [c for c, *_ in prepared], libraries,
+                          title, subtitle, 1, total)
+        number = summary_pages(pdf, entries, title, subtitle, 2, total)
+        # Bound in the ranking's order, so the volume reads the way the summary
+        # points: the foils a reader was sent to looking for are together.
+        order = {row[0]: index for index, row in enumerate(summary_rows(entries))}
+        for case, sections, layouts, _pages in sorted(
+                prepared, key=lambda item: order.get(item[0], 0)):
+            number = draw_case(pdf, case, sections, layouts, colours, half_lives,
+                               title, subtitle, number, total)
+        pdf.infodict()["Title"] = f"{title}: {len(prepared)} foils"
+        pdf.infodict()["Subject"] = subtitle
+
+    if composed is not None:
+        composed.cleanup()
+    for case, sections, _l, _p in prepared:
+        report_scores(case, sections)
+    if skipped:
+        print(f"skipped {len(skipped)}: {' '.join(skipped)}")
+    print(f"\n{len(prepared)} foils, {total} pages")
+    return [out]
 
 
 def main():
@@ -1740,6 +1911,12 @@ def main():
                              "this foil, newest-looking library first")
     parser.add_argument("--results", type=pathlib.Path, default=HERE / "results",
                         help="root the sweeps were filed under (default: results/)")
+    parser.add_argument("--volume", action="store_true",
+                        help="bind every selected foil into one document: a "
+                             "cover, a ranking of all of them, then each foil's "
+                             "own pages in that order. What running every foil "
+                             "buys is the comparison between them, and that is "
+                             "only a page if they are bound together")
     parser.add_argument("--chain", type=pathlib.Path, default=None,
                         help="a chain directory carrying its own decay/, to take "
                              "the T1/2 column from instead of --decay. Only "
@@ -1765,13 +1942,24 @@ def main():
             f"no results under {args.results}. Run:\n"
             f"  python convert_to_arrow.py --case Fe\n"
             f"  python run_transmutation.py --case Fe")
-    if args.output is not None and len(cases) > 1:
+    if args.output is not None and len(cases) > 1 and not args.volume:
         raise SystemExit(
             f"--output names one file but {len(cases)} foils were selected "
-            f"({', '.join(cases)}). Name one foil with --case, or drop --output "
-            f"and they will be written as results/report_<case>.pdf.")
+            f"({', '.join(cases)}). Name one foil with --case, bind them with "
+            f"--volume, or drop --output and they will be written as "
+            f"results/report_<case>.pdf.")
     if args.case is None:
         print(f"foils: {', '.join(cases)} (found under {args.results})")
+
+    if args.volume:
+        libraries = args.libraries or discover_libraries(
+            cases[0], discover_experiments(cases[0], args.results), args.results)
+        out = args.output or (args.results / "report_volume.pdf")
+        for path in build_volume(cases, libraries, args.results, args.chain,
+                                 args.decay, out, args.title, args.subtitle,
+                                 args.experiments):
+            print(f"\n  pdf: {path}")
+        return
 
     for case in cases:
         # One document per foil, carrying every campaign that foil was measured
