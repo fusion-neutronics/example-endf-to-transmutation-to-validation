@@ -52,7 +52,6 @@ step 2 then reports a bare value as it used to.
 
 import argparse
 import fnmatch
-import json
 import os
 import pathlib
 import re
@@ -356,26 +355,6 @@ def build_reactions(sources, decay_dir, out_root, library):
     return out_root
 
 
-def write_scope(out_root, sources, library):
-    """Record which parents the chain covers, beside the data yani wrote.
-
-    Both subsections are scoped to the foil's own isotopes. That is sound for
-    these experiments, since the products barely burn: the longest of them is
-    7.6 hours at 1e10 n/cm2/s, a fluence of 2.9e14 n/cm2, so a product with a
-    1 barn cross section is consumed at the 1e-10 level and second-order
-    production sits far below the channels that carry the heat.
-
-    What it does leave is a chain that is silently specific to one foil, and
-    running a different foil against it solves to an inventory of nothing.
-    yani's own manifest does not carry the parent list, so it goes in a sidecar
-    this repo owns and run_transmutation.py checks before it solves anything.
-    """
-    out_root.mkdir(parents=True, exist_ok=True)
-    (out_root / "scope.json").write_text(
-        json.dumps({"library": library, "parents": sorted(sources)}, indent=2) + "\n"
-    )
-
-
 def _extract(tar, members, dest):
     """Write just `members` out of an open tar, streaming-safe (no seeking)."""
     remaining = set(members)
@@ -467,12 +446,20 @@ def main():
         args.output = work_dir / "neutron"
     # The cross sections are per nuclide and can share one directory: converting
     # W after Fe adds W180.arrow beside Fe56.arrow and takes nothing away. The
-    # chain cannot, because it is scoped to one foil's isotopes (see
-    # `write_scope`), so a second foil's chain written to the same path replaces
-    # the first one's rather than adding to it. Filing it under the foil is what
+    # chain cannot, because both its subsections are scoped to the foil's own
+    # isotopes, so a second foil's chain written to the same path replaces the
+    # first one's rather than adding to it. Filing it under the foil is what
     # lets one library serve both: with a shared path, converting Fe silently
     # left the W chain unrunnable, and the W runs then failed against a chain
     # built for Fe54 Fe56 Fe57 Fe58.
+    #
+    # Scoping them is sound for these experiments, since the products barely
+    # burn: the longest is 7.6 hours at 1e10 n/cm2/s, a fluence of 2.9e14
+    # n/cm2, so a product with a 1 barn cross section is consumed at the 1e-10
+    # level and second-order production sits far below the channels that carry
+    # the heat. yani records the parents each subsection covers in the chain's
+    # own manifest and refuses a material it cannot drive, so nothing here has
+    # to write that down or check it.
     if args.chain is None:
         args.chain = work_dir / f"chain-{args.case}"
     print(f"SOURCE: {source} (data/{source}, results/{source})")
@@ -539,7 +526,6 @@ def main():
             print("REACT: skipped, so the network topology stays on " + DECAY_LIBRARY)
         else:
             build_reactions(sources, decay_dir, args.chain, args.library)
-        write_scope(args.chain, sources, args.library)
 
     print(f"\nArrow cross sections in {out_dir}")
     follow_up = ["python", "run_transmutation.py", "--case", args.case]
