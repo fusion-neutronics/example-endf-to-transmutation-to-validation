@@ -41,16 +41,14 @@ Nothing is recomputed: the inventory solve happened in step 2 and its full
 per-nuclide breakdown is in the JSON, so a report is cheap to regenerate and
 cannot disagree with the run it came from.
 
-Three columns were structural omissions rather than oversights, and are
-recorded here because the reason each one was empty says what it is:
+Three columns mean something the heading does not say on its own:
 
 * An uncertainty on the calculated value, and with it ``%dC_nuc`` in the
-  nuclide analysis. Both are cross-section covariance
-  carried through the inventory. yani-core 0.11.0 reads the MF=33 covariance
-  step 1 now writes beside each nuclide, resamples the activation cross sections
-  from it, folds each draw against the foil's own spectrum and re-solves, so the
-  spread over that ensemble is the number. Step 2 writes it into its JSON and
-  both columns are read from there.
+  nuclide analysis. Both are cross-section covariance carried through the
+  inventory. yani reads the MF=33 covariance step 1 writes beside each nuclide,
+  resamples the activation cross sections from it, folds each draw against the
+  foil's own spectrum and re-solves, so the spread over that ensemble is the
+  number. Step 2 writes it into its JSON and both columns are read from there.
 
   The total is taken over whole inventories rather than assembled from
   per-nuclide sigmas. Decay heat is a function of an inventory, and a parent and
@@ -65,18 +63,14 @@ recorded here because the reason each one was empty says what it is:
   ``data_uncertainty_info`` alongside, which names those nuclides, and a run
   made without the covariance leaves both columns empty rather than at zero.
 
-* Decay feeds. ``TransmutationChain`` gained ``decays`` in yani 0.8, so a route
-  can be followed past its neutron reaction and ``W186(n,2n)W185_m1(IT)W185`` is
-  derivable rather than guessed at.
-* "Path %", the fraction of a product's inventory arriving down each route, and
-  with it the flux-weighted isomeric branching. The solve computed the rate of
-  every edge to build its burnup matrix and then discarded it, so the weights
-  could not be recovered from the result. yani-core 0.9.0 hands them back
-  (``TransmutationResults.get_reaction_rates``, fusion-neutronics/core#505),
-  run_transmutation.py writes them into its JSON, and both are now on the page.
+* "Path %", the fraction of a product's inventory arriving down each route.
+  ``get_production_routes`` answers from the chain and the rates the solve ran
+  with, weighted by what the foil's own nuclides drove, and step 2 files the
+  answer. A route is followed past its neutron reaction, so
+  ``W186(n,2n)W185_m1(IT)W185`` is read rather than guessed at.
 
-  The branching is the number that says which evaluated quantity a disagreement
-  belongs to, and it cannot be read off the chain: the chain file's own
+* The flux-weighted isomeric branching, which says which evaluated quantity a
+  disagreement belongs to. It cannot be read off the chain: the chain file's own
   branching for the dominant tungsten channel is a placeholder,
 
       W186 (n,2n) -> W185      branching 1.000000
@@ -85,13 +79,11 @@ recorded here because the reason each one was empty says what it is:
   which the energy-dependent overlay in ``branching/`` replaces at solve time.
   It is not zero in any meaningful sense: with the overlay configured W185m
   carries 98% of the decay heat at the first cooling point, and without it 10%.
-  The split the solve actually used is now printed rather than inferred.
+  The split the solve actually used is printed rather than inferred.
 
-That is why this script needs yani 0.11.1 or newer. It still reads a result
-filed by an older run: one with no per-edge rates falls back to the unweighted
-route order and says so rather than printing zeros, and one with no sigma leaves
-the two uncertainty columns empty rather than at zero. What it will not do is
-invent either from what is there.
+A result carrying no sigma leaves the two uncertainty columns empty rather than
+at zero, and one carrying no routes leaves that page for a rerun of step 2.
+What this script will not do is invent either from what is there.
 
 One difference from the published pages is deliberate rather than a gap. They
 write an isomer as ``W185m`` and a second metastable state as ``Ta182n``; every
@@ -220,10 +212,6 @@ ROUTES_SHOWN = 6
 # if the routes were unranked. The published pages carry nothing under about
 # 2%, which this is well under; it is set to drop what rounds to zero in the
 # column rather than to second-guess which small routes are interesting.
-#
-# Only applied when the result carries per-edge rates. Without them there is no
-# share to compare against and every route stands, which is the same fallback
-# the ordering takes.
 ROUTE_SHARE_FLOOR = 0.001
 
 # Clearance kept under the last block on a page, above the page number.
@@ -272,18 +260,12 @@ def element_name(case):
 def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
     """Half-lives for the ``T1/2`` column, in seconds, keyed by nuclide.
 
-    The one thing this report still needs a chain for. Routes and isomeric
-    branching used to come from one too, walked and weighted here; yani derives
-    both from the solve now and step 2 files them, so the topology and the
-    branching overlay are no longer read at report time at all.
+    The one thing this report needs a chain for. Routes and isomeric branching
+    come from the solve, filed by step 2, so neither the topology nor the
+    branching overlay is read at report time.
 
-    That is what makes this small. Half-lives live entirely in the decay
-    subsection, so the decay sublibrary alone answers it, and the library's own
-    chain need not be found. Composing all four subsections used to be the whole
-    point of this function -- the cached chain's topology sends every (n,2n) to a
-    ground state, and without the converter's ``branching/`` overlay
-    W186(n,2n)W185m does not exist, which on a tungsten foil is 98% of the decay
-    heat. That mattered when the routes were walked here. It does not now.
+    Half-lives live entirely in the decay subsection, so the decay sublibrary
+    alone answers this and the library's own chain need not be found.
 
     ``TransmutationChain`` wants a directory with a manifest and its subsections
     beneath it, and the cache holds the decay subsection's contents rather than a
@@ -329,9 +311,9 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
 def edge_weights(result):
     """``(parent, kind, target) -> production per parent atom`` for one result.
 
-    Written by run_transmutation.py from ``get_reaction_rates``, which arrived
-    with yani-core 0.9.0. Absent from results filed before that, and absent for
-    a decay-only run, in which case the routes fall back to being unweighted.
+    Written by run_transmutation.py from ``get_reaction_rates``. Used to rank
+    the isomeric channels by production rather than by rate alone, and empty
+    for a decay-only run, which drove no edges.
     """
     out = {}
     for row in result.get("edge_rates") or []:
@@ -394,11 +376,10 @@ def format_percent(value):
 def uncertainty_of(result):
     """The nuclear-data sigma on the calculated heat, or None if the run carried none.
 
-    Absent for a run made with ``--no-uncertainty``, for one made against cross
-    sections converted without the covariance, and for every result filed before
-    yani-core 0.11.0, which could not produce it. The distinction does not matter
-    to a caller: the column is filled when there is a number and left off when
-    there is not, which is what it did for every library before this existed.
+    Absent for a run made with ``--no-uncertainty``, and for one made against
+    cross sections converted without the covariance. The distinction does not
+    matter to a caller: the column is filled when there is a number and left off
+    when there is not.
     """
     values = result.get("yani_uncertainty_uW_per_g")
     return None if values is None else np.array(values, dtype=float)
@@ -1097,11 +1078,10 @@ def pathway_groups(primary, half_lives):
     Kept apart so a page that cannot hold them all breaks between products
     rather than orphaning a product's routes from the line that names it.
 
-    The routes are read off the result rather than derived here. Step 2 asks
-    yani for them, which answers from the chain and the rates the solve actually
-    ran with; this used to walk the chain itself, weight the routes from
-    ``edge_rates`` and rank them, which was several hundred lines and depended on
-    a chain loaded separately from the one that produced the numbers.
+    The routes are read off the result rather than derived here: step 2 asks
+    yani, which answers from the chain and the rates the solve actually ran
+    with, so the report cannot rank them against a chain that differs from the
+    one that produced the numbers.
 
     Returns the blocks, how many routes were left out of them, and whether the
     result carried routes at all.
@@ -1174,13 +1154,12 @@ def isomeric_split_rows(primary):
     return rows
 
 
-def pathway_preamble(weighted_any, dropped):
+def pathway_preamble(has_routes, dropped):
     """What the routes table means, and what it left out."""
-    if not weighted_any:
-        return ("These results carry no production routes. They come from yani, "
-                "which step 2\nasks for them and files them beside the heat; a "
-                "result filed by an older step 2\nhas none. Re-run it to fill "
-                "this page.")
+    if not has_routes:
+        return ("These results carry no production routes. Step 2 asks yani for "
+                "them and files\nthem beside the heat, so re-run it to fill this "
+                "page.")
 
     text = ("Routes are yani's own answer, walked from the nuclides the foil "
             "started with\nover the library's topology and decay data, one "
@@ -1221,9 +1200,9 @@ def pathway_layout(results, note, half_lives):
     if not primary.get("production_routes"):
         return {"pages": [None], "note": note}
 
-    groups, dropped, weighted_any = pathway_groups(primary, half_lives)
+    groups, dropped, has_routes = pathway_groups(primary, half_lives)
     split_rows = isomeric_split_rows(primary)
-    preamble = pathway_preamble(weighted_any, dropped)
+    preamble = pathway_preamble(has_routes, dropped)
 
     scratch = plt.figure(figsize=PAGE)
     extras = 0.020 + text_height(scratch, preamble, 7.6)
@@ -1749,9 +1728,8 @@ def prepare(case, experiments, libraries, results_root, half_lives):
     note = None
     if not any(result.get("production_routes")
                for _experiment, results in sections for _library, result in results):
-        note = ("These results carry no production routes. They were filed by a "
-                "step 2 older than yani 0.13.0, which is where the routes come "
-                "from; rerun it to fill this page.")
+        note = ("These results carry no production routes. Re-run step 2 to "
+                "fill this page.")
 
     layouts = [pathway_layout(results, note, half_lives)
                for _experiment, results in sections]

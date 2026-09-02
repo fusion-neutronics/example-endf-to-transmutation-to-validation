@@ -44,10 +44,9 @@ comes from an isomer, and ``--no-reactions`` leaves the topology on endf-b8.1.
 A fourth thing comes out of the same evaluations: the MF=33 cross-section
 covariance, written as ``covariance.arrow`` beside each nuclide. That is what
 puts an uncertainty on the calculated decay heat, which the published reports
-print and this example could not until yani-core 0.11.0 read it. It is on by
-default because it is close to free: on W186 it costs no measurable NJOY time
-and 78 kB against a 2.0 MB nuclide. ``--no-covariance`` leaves it out, and
-step 2 then reports a bare value as it used to.
+print. It is on by default because it is close to free: on W186 it costs no
+measurable NJOY time and 78 kB against a 2.0 MB nuclide. ``--no-covariance``
+leaves it out, and step 2 then reports a bare value.
 """
 
 import argparse
@@ -200,10 +199,9 @@ def tendl_name(nuclide):
 
     The name comes apart with `yani.data.split_nuclide`, which is where that
     belongs: stripping the digits off "Ta180_m1" leaves "Ta180_m" and a mass
-    number of 1, and natural tantalum really does contain Ta180m, so this file
-    used to carry its own splitter to avoid exactly that. yani exposes the one
-    the rest of the network already uses, so the two cannot disagree about what
-    a name means.
+    number of 1, and natural tantalum really does contain Ta180m. Using yani's
+    splitter rather than a local one means the two cannot disagree about what a
+    name means.
     """
     symbol, mass, state = yani.data.split_nuclide(nuclide)
     suffix = "" if not state else "m" + ("" if state == 1 else str(state))

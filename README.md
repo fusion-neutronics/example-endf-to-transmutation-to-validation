@@ -310,15 +310,6 @@ about where a disagreement lives, and six lines of `0.0%` under every product
 made down one channel read as if the column were not a ranking at all. The JSON
 beside the PDF carries every route, weighted, with nothing dropped.
 
-The same rates give the **flux-weighted isomeric branching**, ranked by
-production and printed for every channel that lands in more than one final
-state. That is the number that says whether a
-disagreement belongs to a cross section or to a branching ratio, and it is not
-in the chain file: the dominant tungsten channel carries a placeholder `0.0`
-there, which the energy-dependent overlay replaces at solve time. A run against
-yani older than 0.9.0 files no rates, and the page then falls back to the
-unweighted order and says so.
-
 The **nuclide E/C analysis** under the C/E table names the products that could
 account for a disagreement: each one's largest share of the calculation, when
 it reaches it, and the E/C there. The E/C is the total at that cooling point,
@@ -331,8 +322,7 @@ calculation is a statement about that product.
 
 The last column of that table, `%ΔCnuc`, and the `+/- 6%` the published reports
 print beside every calculated µW/g, are both cross-section covariance carried
-through the inventory. Neither was reachable until yani 0.11.1 and both are now
-filled.
+through the inventory.
 
 Step 1 writes the MF=33 covariance as a `covariance.arrow` beside each nuclide.
 That is on by default, because it is nearly free: on W186 it costs no measurable
@@ -353,7 +343,7 @@ Two things about that number are worth knowing before it is used.
 It is **the activation cross sections**, in practice and not by construction.
 Half-lives, decay branching ratios, fission yields and the isomeric-branching
 overlay are held at their evaluated values. The flux is the one that could move
-and does not: yani 0.12.0 perturbs the spectrum as a second source and asks for
+and does not: yani perturbs the spectrum as a second source and asks for
 both by default (`DataUncertainty.available_sources()` returns
 `['cross_sections', 'flux_spectrum']`), but the FNS benchmark publishes its
 measured spectrum as 709 group fluxes with no sigma on them, so there is nothing
@@ -532,11 +522,10 @@ apart is reporting something other than the data.
   is not much reason to, since it costs no measurable NJOY time and 4% more
   disk. An evaluation that carries no MF=33 writes none, and step 1 says which.
 
-  It has to come from the ENDF, so an Arrow directory converted before yani
-  0.11.0 does not have it and cannot be given it without rerunning NJOY. Step 2
-  against one of those does not fail and does not report zero: it says no
-  covariance was available and names the reconversion, and the report leaves
-  both columns empty.
+  It has to come from the ENDF, so a directory converted with `--no-covariance`
+  cannot be given it without rerunning NJOY. Step 2 against one of those does
+  not fail and does not report zero: it says no covariance was available and
+  names the reconversion, and the report leaves both columns empty.
 
 The first two matter for the same reason: every part of the answer that comes from
 somewhere other than the library under test makes the C/E harder to read. Mean

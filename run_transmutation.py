@@ -117,9 +117,7 @@ def decay_heat_spread(results, material_id, case, steps, keys):
 
     yani does that itself. ``get_decay_heat_uncertainty`` evaluates the heat once
     per replica and hands back the ensemble's sample standard deviation beside
-    the unperturbed value, which is the same statistic this used to build by
-    rebuilding a Material per replica out of ``get_uncertainty_inventories`` and
-    taking ``np.std(..., ddof=1)`` over the totals. Both divide by N - 1, because
+    the unperturbed value. It divides by N - 1, because
     the quantity wanted is how far the answer moves when the cross sections move
     within their covariance, which is the width of the ensemble rather than the
     error on where its centre sits.
@@ -205,7 +203,7 @@ def report_uncertainty(info, relative):
     # library can state covariance for every isotope in the foil and still say
     # nothing about the one channel carrying the heat, and then the count reads
     # as coverage the sigma does not have. yani weights it by rate and by the
-    # parent's own density, which this used to do by hand and got wrong: an edge
+    # parent's own density, which is the part that is easy to get wrong: an edge
     # rate is per atom of its parent and production is not.
     fraction = info.get("rate_fraction_covered_total")
     if fraction is not None:
@@ -295,10 +293,9 @@ def run(case, cross_sections, chain, uncertainty=None):
     print(f"material: {len(nuclides)} nuclides, {' '.join(nuclides)}")
 
     # A chain left over from a different foil carries no reactions for these
-    # nuclides and used to solve to an inventory of nothing, which surfaced only
-    # as zero decay heat at the end of a full run. yani 0.13.0 refuses it before
-    # the solve and names both the material and what the chain covers, so the
-    # sidecar this file used to write and check is gone.
+    # nuclides. yani refuses it before the solve and names both the material and
+    # what the chain covers, rather than solving to an inventory of nothing that
+    # would surface only as zero decay heat at the end of a full run.
 
     # `transmute` hands back a TransmutationResults keyed by material id, not a
     # plain list. Its index 0 is the initial composition, so `step_materials` is
@@ -337,18 +334,15 @@ def run(case, cross_sections, chain, uncertainty=None):
         if ensemble is not None:
             sigma, by_nuclide_sigma = ensemble
 
-    # The rate of every production edge the solve drove, which yani-core 0.9.0
-    # hands back and earlier versions computed and threw away
-    # (fusion-neutronics/core#505). Summed over the irradiation pulses and
-    # weighted by their duration, so an edge carries the production it drove per
-    # atom of its parent over the whole irradiation, which is what weights a
-    # route. Cooldown steps drive no reactions and contribute nothing.
+    # The rate of every production edge the solve drove. Summed over the
+    # irradiation pulses and weighted by their duration, so an edge carries the
+    # production it drove per atom of its parent over the whole irradiation.
+    # Cooldown steps drive no reactions and contribute nothing.
     #
-    # Ratios within one (parent, kind) are the flux-weighted isomeric branching:
-    # the split arrives as two edges of one channel, so the sum is the channel
-    # rate and the ratio is f_m. That is the number the chain file cannot give,
-    # because its own branching for the dominant tungsten channel is a
-    # placeholder the energy-dependent overlay replaces at solve time.
+    # Kept so step 5 can rank the isomeric channels by production rather than by
+    # rate alone: an edge rate is per atom of its parent, and a channel on a
+    # trace isotope outranks one on the bulk if the density is left out. The
+    # branching fractions themselves come from `get_isomeric_branching` below.
     edges = {}
     for step, (seconds, _flux) in enumerate(case.irradiation):
         for parent, kinds in (results.get_reaction_rates(material_id, step)
@@ -370,10 +364,10 @@ def run(case, cross_sections, chain, uncertainty=None):
     initial_atoms = dict(initial.nuclides) if initial is not None else {}
 
     # An irradiated foil always activates, so heat that is identically zero
-    # means the network produced nothing at all. It used to be reported as
-    # C/E 0.000, which reads like a physics result rather than the wiring
-    # mistake it invariably is, and a sweep would log it foil after foil
-    # without ever failing. It is an error here instead.
+    # means the network produced nothing at all. Reported as C/E 0.000 it reads
+    # like a physics result rather than the wiring mistake it invariably is, and
+    # a sweep would log it foil after foil without ever failing. It is an error
+    # here instead.
     #
     # The chain is the usual suspect: it is rebuilt per foil and scoped to that
     # foil's isotopes, so one built for a different foil leaves these nuclides
@@ -390,11 +384,9 @@ def run(case, cross_sections, chain, uncertainty=None):
             f"--output {cross_sections} --chain {chain}"
         )
     # The production routes into each product that carries heat, and the
-    # flux-weighted isomeric branching, both derived by yani from the chain and
-    # the rates the solve actually ran with. They were rebuilt in step 5 from
-    # `edge_rates` plus a second load of the chain, which is a few hundred lines
-    # of walking and one chance for the two chains to differ; yani 0.13.0
-    # answers from the solve itself.
+    # flux-weighted isomeric branching, both answered by yani from the chain and
+    # the rates the solve actually ran with, rather than rebuilt here from a
+    # second load of the chain that could differ from the one that solved.
     #
     # Routes are asked for over the first irradiation pulse. Every pulse in
     # these schedules shares one spectrum, so the shares are the same for each,
