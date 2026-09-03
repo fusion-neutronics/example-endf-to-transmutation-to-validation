@@ -2,8 +2,8 @@
 """Step 5: bind the sweep results into a decay-heat validation report PDF.
 
 Reads the per-foil JSON that ``run_transmutation.py`` and ``sweep_fns.py``
-already write, one sweep per library, and lays them out in the page order the
-UKAEA decay-heat validation reports use:
+already write, one sweep per library, and lays them out in the page order a
+decay-heat validation report conventionally uses:
 
     make_report.py                 # one document per foil, all of its campaigns
     make_report.py --case W        # just this one
@@ -41,12 +41,11 @@ Nothing is recomputed: the inventory solve happened in step 2 and its full
 per-nuclide breakdown is in the JSON, so a report is cheap to regenerate and
 cannot disagree with the run it came from.
 
-Every column the published reports carry is now filled. Three were structural
-omissions rather than oversights, and are recorded here because the reason each
-one was empty says what it is:
+Three columns were structural omissions rather than oversights, and are
+recorded here because the reason each one was empty says what it is:
 
-* An uncertainty on the calculated value (the reports print "+/- 6%"), and with
-  it ``%dC_nuc`` in the nuclide analysis. Both are cross-section covariance
+* An uncertainty on the calculated value, and with it ``%dC_nuc`` in the
+  nuclide analysis. Both are cross-section covariance
   carried through the inventory. yani-core 0.11.0 reads the MF=33 covariance
   step 1 now writes beside each nuclide, resamples the activation cross sections
   from it, folds each draw against the foil's own spectrum and re-solves, so the
