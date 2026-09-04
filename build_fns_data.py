@@ -146,8 +146,9 @@ def time_unit(deck_cooling, last_time, label):
     The measurement file gives bare numbers. The deck's cooling steps cover
     roughly the same span in units it does state, so whichever unit puts the
     last measured point closest to the end of that span is the one meant. The
-    candidates are 60x apart, so a deck that disagrees with its measurement in
-    detail still picks the right one. This is the only thing the deck's own
+    candidates are at least 24x apart, minutes to hours being 60x and hours to
+    days 24x, so a deck that disagrees with its measurement in detail still
+    picks the right one. This is the only thing the deck's own
     cooling schedule is needed for.
     """
     span = sum(deck_cooling)

@@ -91,9 +91,9 @@ recorded here because the reason each one was empty says what it is:
   carries 98% of the decay heat at the first cooling point, and without it 10%.
   The split the solve actually used is now printed rather than inferred.
 
-That is why this script needs yani 0.11.1 or newer. It still reads a result
-filed by an older run: one with no per-edge rates falls back to the unweighted
-route order and says so rather than printing zeros, and one with no sigma leaves
+That is why this script needs YANI 0.11.1 or newer. It still reads a result
+filed by an older run: one with no production routes gets a page saying so and
+asking for a re-run rather than a table of zeros, and one with no sigma leaves
 the two uncertainty columns empty rather than at zero. What it will not do is
 invent either from what is there.
 
@@ -199,8 +199,9 @@ FAINT_INK = "#bfbfbf"
 #
 # Note this is a peak share, not a share of the heat summed over the cooling
 # steps. Summed heat is dominated by the early high-heat points, so ranking on
-# it buries any product that peaks late: on W/2000exp_5min it puts Ta184 tenth
-# despite Ta184 carrying 18% of the heat at one point.
+# it buries any product that peaks late: on W/2000exp_5min it puts W185 tenth
+# despite W185 reaching 2.6% of the heat, three places below where its peak
+# share ranks it.
 SHARE_FLOOR = 0.002
 
 # The share of the calculation a product needs to earn a line in the nuclide
@@ -226,9 +227,9 @@ ROUTES_SHOWN = 6
 # 2%, which this is well under; it is set to drop what rounds to zero in the
 # column rather than to second-guess which small routes are interesting.
 #
-# Only applied when the result carries per-edge rates. Without them there is no
-# share to compare against and every route stands, which is the same fallback
-# the ordering takes.
+# Applied to every route, since yani files a share with each one. The largest
+# route survives it whatever its share, so a product is never left with no
+# pathway at all.
 ROUTE_SHARE_FLOOR = 0.001
 
 # Clearance kept under the last block on a page, above the page number.
@@ -295,16 +296,23 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
     chain root, so one symlink and a manifest stand it up. `chain` overrides all
     of it, for a chain that carries its own ``decay/``.
 
-    Returns the mapping and the temporary directory to clean up, or ``({}, None)``
-    when there is nothing to read: the column is then left blank, which is what
-    it did before and is better than a report that refuses to build over it.
+    Returns the mapping, the temporary directory to clean up, and the name of
+    the sublibrary it came from, or ``({}, None, None)`` when there is nothing to
+    read: the column is then left blank, which is what it did before and is
+    better than a report that refuses to build over it. The name is returned
+    rather than assumed by the caller because the decay page states it, and a
+    page that names a library the half-lives did not come from is worse than one
+    that names none.
     """
     try:
         import yani
 
         if chain is not None and (chain / "decay").is_dir():
             print(f"half-lives: {chain}")
-            return dict(yani.TransmutationChain(str(chain)).half_lives), None
+            named = json.loads((chain / "manifest.json").read_text()).get("library") \
+                if (chain / "manifest.json").is_file() else None
+            return (dict(yani.TransmutationChain(str(chain)).half_lives), None,
+                    named or str(chain))
 
         borrowed = cache / f"{decay}-transmutation-decay.arrow"
         if not borrowed.is_dir():
@@ -312,7 +320,7 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
                   f"left blank.\n"
                   f"            Convert the decay sublibrary first, or pass "
                   f"--chain a directory that has its own decay/.")
-            return {}, None
+            return {}, None, None
 
         # Held open for as long as the chain is read, and removed after.
         composed = tempfile.TemporaryDirectory(prefix="yani-report-decay-")
@@ -325,10 +333,10 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
         }))
         loaded = dict(yani.TransmutationChain(str(root)).half_lives)
         print(f"half-lives: {len(loaded)} from {borrowed.name}")
-        return loaded, composed
+        return loaded, composed, decay
     except Exception as error:  # noqa: BLE001 - the column is optional
         print(f"half-lives: unreadable ({error}). The T1/2 column is left blank.")
-        return {}, None
+        return {}, None, None
 
 
 def edge_weights(result):
@@ -336,7 +344,8 @@ def edge_weights(result):
 
     Written by run_transmutation.py from ``get_reaction_rates``, which arrived
     with yani-core 0.9.0. Absent from results filed before that, and absent for
-    a decay-only run, in which case the routes fall back to being unweighted.
+    a decay-only run, in which case the isomeric branching block has nothing to
+    rank.
     """
     out = {}
     for row in result.get("edge_rates") or []:
@@ -621,7 +630,8 @@ def score(result):
     ``mean % diff. from E`` is the mean of |C/E - 1|, and ``mean chi^2`` divides
     by the measurement's own sigma, so it says whether a deviation is larger
     than the experiment can resolve. Both are the report's definitions: neither
-    carries an uncertainty on the calculated value, because there is not one.
+    folds in the calculated value's own sigma, which is printed beside it and
+    drawn as a band instead.
     """
     measured = np.array(result["measured_uW_per_g"], dtype=float)
     sigma = np.array(result["measured_uncertainty"], dtype=float)
@@ -672,7 +682,7 @@ def nuclide_analysis(result, half_lives, floor=NUCLIDE_EC_FLOOR):
     is a calorimeter reading and does not come apart by nuclide, so there is no
     such thing as one product's E/C, and printing the total against every row
     would be four columns of the same number. What makes a row worth reading is
-    the share beside it: an E/C of 0.51 at a point where one product is 98% of
+    the share beside it: an E/C of 0.40 at a point where one product is 98% of
     the calculation is a statement about that product, and the published table
     prints exactly one row for tungsten's 5 minute irradiation for that reason.
 
@@ -932,6 +942,13 @@ def summary_rows(entries):
     are known to 30%. Ordered worst last because the point of running every foil
     is to find where the library falls over, and the end of a list is where the
     eye stops.
+
+    The alloys go in their own block at the end rather than ranked among the
+    elements. A deviation on SS316 is a statement about six elements at once and
+    about the weights they were mixed in, so it does not compare with one on a
+    single-element foil, and a reader running down the column looking for the
+    cross section to blame cannot use it the same way. Within each block the
+    ranking is the same.
     """
     rows = []
     for case, sections in entries:
@@ -949,7 +966,7 @@ def summary_rows(entries):
             f"{result['median_measurement_sigma_percent']:.1f}",
             f"{values['mean_chi2']:.2f}",
         ]))
-    return [row for _deviation, row in sorted(rows, key=lambda r: r[0])]
+    return [row for _rank, row in sorted(rows, key=lambda r: r[0])]
 
 
 def summary_pages(pdf, entries, title, subtitle, number, total):
@@ -1203,14 +1220,15 @@ def isomeric_split_rows(primary):
 def pathway_preamble(weighted_any, dropped):
     """What the routes table means, and what it left out."""
     if not weighted_any:
-        return ("These results carry no production routes. They come from yani, "
+        return ("These results carry no production routes. They come from YANI, "
                 "which step 2\nasks for them and files them beside the heat; a "
                 "result filed by an older step 2\nhas none. Re-run it to fill "
                 "this page.")
 
-    text = ("Routes are yani's own answer, walked from the nuclides the foil "
-            "started with\nover the library's topology and decay data, one "
-            "reaction step and then along\nthe decay chain. They are ordered by "
+    text = ("Routes are YANI's own answer, walked from the nuclides the foil "
+            "started with\nover the library's own topology and the shared decay "
+            "data named on the last\npage, one reaction step and then along "
+            "the decay chain. They are ordered by "
             "\"path\", the share of the product's\nproduction arriving down each "
             "route: the atoms the route starts from, times\nwhat its reaction "
             "drove per atom of its parent over the irradiation, times the\n"
@@ -1890,7 +1908,7 @@ def prepare(case, experiments, libraries, results_root, half_lives):
     if not any(result.get("production_routes")
                for _experiment, results in sections for _library, result in results):
         note = ("These results carry no production routes. They were filed by a "
-                "step 2 older than yani 0.13.0, which is where the routes come "
+                "step 2 older than YANI 0.13.0, which is where the routes come "
                 "from; rerun it to fill this page.")
 
     layouts = [pathway_layout(results, note, half_lives)
@@ -2006,7 +2024,7 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
 
     entries = [(case, sections) for case, sections, _l, _p in prepared]
     ranking = max(1, -(-len(entries) // SUMMARY_ROWS))
-    total = 1 + ranking + sum(pages for _c, _s, _l, pages in prepared)
+    total = 2 + ranking + sum(pages for _c, _s, _l, pages in prepared)
     colours = library_colours(libraries)
 
     out.parent.mkdir(parents=True, exist_ok=True)
