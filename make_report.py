@@ -586,13 +586,22 @@ def load_results(case, experiment, libraries, results_root):
     """
     found, missing = [], []
     for library in libraries:
-        for root in (results_root / library / "sweep", results_root / library):
-            path = root / f"fns_{case}_{experiment}.json"
-            if path.is_file():
-                found.append((library, json.loads(path.read_text())))
-                break
-        else:
+        filed = [root / f"fns_{case}_{experiment}.json"
+                 for root in (results_root / library / "sweep", results_root / library)
+                 if (root / f"fns_{case}_{experiment}.json").is_file()]
+        if not filed:
             missing.append(library)
+            continue
+        # Newest wins. A sweep and a single run both file under one library, and
+        # taking a fixed one of the two means a foil re-run minutes ago is passed
+        # over for a sweep from last week without saying so. This report is meant
+        # to be unable to disagree with the run it came from, and quietly reading
+        # the older of two files is precisely how it would.
+        path = max(filed, key=lambda candidate: candidate.stat().st_mtime)
+        if len(filed) > 1:
+            print(f"{library}: {case}/{experiment} is filed twice, reading the "
+                  f"newer {path.relative_to(results_root)}")
+        found.append((library, json.loads(path.read_text())))
     if missing:
         print(f"no {case}/{experiment} result for: {', '.join(missing)}")
     if not found:
