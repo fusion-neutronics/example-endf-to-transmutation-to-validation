@@ -120,6 +120,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -1447,7 +1448,7 @@ def draw_heat(axes, case, library, result, values, products, colours, fontsize=6
     axes.set_ylabel("Heat Output [µW/g]", fontsize=fontsize)
     axes.set_title(f"FNS {result['experiment']} - {case} - {library_label(library)}",
                    fontsize=fontsize + 1.0)
-    _finish_panel(axes, fontsize)
+    _finish_panel(axes, fontsize, banded=spread is not None)
 
 
 def draw_comparison(axes, case, results, colours, fontsize=6.5):
@@ -1513,7 +1514,9 @@ def draw_comparison(axes, case, results, colours, fontsize=6.5):
     axes.set_ylabel("Heat Output [µW/g]", fontsize=fontsize)
     axes.set_title(f"FNS {results[0][1]['experiment']} - {case} - all libraries",
                    fontsize=fontsize + 1.0)
-    _finish_panel(axes, fontsize)
+    _finish_panel(axes, fontsize,
+                  banded=any(uncertainty_of(result) is not None
+                             for _library, result in results))
 
 
 def comparison_page(pdf, case, sections, colours, title, subtitle, number, total):
@@ -1592,10 +1595,24 @@ def draw_share(axes, case, library, result, products, colours, fontsize=6.5):
     _finish_panel(axes, fontsize)
 
 
-def _finish_panel(axes, fontsize):
-    """The legend outside the axes and the grid, shared by both panel kinds."""
+def _finish_panel(axes, fontsize, banded=False):
+    """The legend outside the axes and the grid, shared by both panel kinds.
+
+    ``banded`` adds an entry for the shaded band. matplotlib gives
+    ``fill_between`` no legend entry of its own here, since labelling one band
+    per library would repeat the library names already in the legend in a second
+    swatch each. One grey proxy says what all of them are instead, because a
+    shaded area nothing in the legend accounts for is read as whatever the
+    reader already expects, and on a decay heat plot that is counting statistics
+    rather than the cross-section covariance this actually is.
+    """
     axes.tick_params(labelsize=fontsize - 0.5)
-    axes.legend(fontsize=fontsize - 1.5, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+    handles, labels = axes.get_legend_handles_labels()
+    if banded:
+        handles.append(Patch(facecolor="#666666", alpha=BAND_ALPHA, linewidth=0))
+        labels.append("+/- 1$\\sigma$ nuclear data")
+    axes.legend(handles, labels,
+                fontsize=fontsize - 1.5, loc="upper left", bbox_to_anchor=(1.01, 1.0),
                 frameon=False, handlelength=1.5, borderpad=0.2, labelspacing=0.28)
     axes.grid(alpha=0.25, linewidth=0.4)
 
