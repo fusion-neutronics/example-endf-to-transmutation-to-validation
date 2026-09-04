@@ -911,8 +911,20 @@ def volume_cover_page(pdf, cases, libraries, title, subtitle, number, total):
     plt.close(figure)
 
 
+def is_element(case):
+    """Whether a foil is one element, as against one of the benchmark's alloys.
+
+    Asked of yani's element table rather than pattern-matched on the name, so
+    Inc600, NiCr, SS304 and SS316 are the four that answer no without this file
+    holding a list of them that a new alloy would fall off.
+    """
+    import yani.data
+
+    return case in yani.data.element_names()
+
+
 def summary_rows(entries):
-    """One ranking row per foil, worst deviation last.
+    """One ranking row per foil, worst deviation last, alloys after the elements.
 
     Ranked on the primary library's mean deviation, and read against the two
     sigmas beside it rather than on its own: a foil 30% out that was measured to
@@ -928,7 +940,7 @@ def summary_rows(entries):
         values = score(result)
         ratio = np.array(result["ratio"], dtype=float)
         percent = uncertainty_percent(result)
-        rows.append((values["mean_percent_diff"], [
+        rows.append(((not is_element(case), values["mean_percent_diff"]), [
             case,
             f"{len(sections)}",
             f"{np.nanmedian(ratio):.3f}",
