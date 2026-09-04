@@ -22,8 +22,8 @@ It defaults to iron, and `--case` takes any of the 73 FNS foils.
 
 There is no neutron transport anywhere in this example. The FNS experiment
 published the spectrum the foil actually saw, so that spectrum is the input and
-yani collapses it against the cross sections to get one-group reaction rates.
-That is what yani is for: transmutation and activation given a spectrum.
+YANI collapses it against the cross sections to get one-group reaction rates.
+That is what YANI is for: transmutation and activation given a spectrum.
 
 ## Install
 
@@ -44,9 +44,10 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-That is the whole install: everything comes from PyPI, nothing from git, and
-nothing needs a checkout beside this one. `yani` both reads the nuclear data
-and makes it: the ENDF conversion, the reaction topology and the isomeric
+That is the whole install: every dependency is a prebuilt wheel, nothing comes
+from git, and nothing needs a checkout beside this one. njoy2016 is the one that
+is not on PyPI, so `requirements.txt` adds a wheel index for it. The `yani`
+wheel both reads the nuclear data and makes it: the ENDF conversion, the reaction topology and the isomeric
 branching are all functions on the wheel.
 
 The wheels are abi3 from Python 3.10 up, one per platform rather than one per
@@ -117,8 +118,9 @@ The directory is searched recursively, and every file in it is identified by
 the nuclide named in its own header rather than by its name. Naming conventions
 do not matter: `n-Fe056.tendl`, `n-026_Fe_056.endf` and `whatever.dat` are all
 recognised, non-ENDF files in the same directory are ignored, and metastable
-evaluations are excluded by their LIS0 flag rather than by spotting an `m` in
-the filename. Scanning a 2850-file library takes under a second. If an isotope
+evaluations are named from their LIS0 flag, `Ta180_m1`, rather than spotted by
+an `m` in the filename, so they are neither mistaken for the ground state nor
+dropped. That is what makes natural tantalum's Ta180m convertible. Scanning a 2850-file library takes under a second. If an isotope
 is missing, or two evaluations of the same one are present, it says which and
 stops rather than guessing.
 
@@ -138,8 +140,9 @@ you nothing: evaluations are matched on their filename wherever they sit.
 
 The last form transfers around 3 GB whatever you asked for, because TENDL
 publishes its neutron sublibrary as a single archive; only the wanted members
-are written to disk. Conversion runs about twenty seconds per isotope, and each
-run reconverts the isotopes for the selected foil.
+are written to disk. Conversion runs about twenty seconds per isotope, and an
+isotope already converted under the same library is reused, so that twenty
+seconds is paid once. `--force` redoes it.
 
 `run_transmutation.py` writes `results/<source>/fns_<case>_<experiment>.png` and
 a JSON of the same numbers, including the per-nuclide breakdown of the heat and
@@ -153,11 +156,16 @@ python convert_to_arrow.py --case W --endf-dir libs --library tendl-2025
 python run_transmutation.py --case W --source libs
 ```
 
-or, equivalently:
+The second line can name the data directly instead, which reads the same cross
+sections and infers the same chain beside them:
 
 ```bash
-python run_transmutation.py --case W --cross-sections data/libs/neutron
+python run_transmutation.py --case W --cross-sections data/libs/neutron --source libs
 ```
+
+`--source libs` is still needed there. Without it the results file under
+`results/tendl-2025`, because the source name comes from `--library`, and the
+run would be labelled with a library it did not read.
 
 When `--cross-sections` ends with `/neutron`, `run_transmutation.py` defaults
 `--chain` to the sibling `/chain-<case>` directory.
@@ -300,7 +308,7 @@ pathway page quietly changes.
 the sublibrary otherwise. Neither is needed for the common case.
 
 Routes are whole strings, `W186(n,2n)W185m(IT)W185`, one neutron reaction off an
-isotope of the foil and then the decay steps that carry the product on. **yani
+isotope of the foil and then the decay steps that carry the product on. **YANI
 works them out, not this repo.** Step 2 asks
 `TransmutationResults.get_production_routes` and files the answer beside the
 heat; step 5 binds it. That matters because a route is a statement about the
@@ -320,8 +328,8 @@ parent over the irradiation, times the branching of every decay it passes
 through. A route through a 1% decay branch delivers 1% of what the reaction
 made. Each further reaction step carries the step duration too, so a two-step
 route is in the same units as a one-step one and comes out smaller by roughly a
-factor of the fluence, which on a 5 minute irradiation at 1e10 n/cm2/s is parts
-in a billion.
+factor of the cross section times the fluence, which on a 5 minute irradiation
+at 1e10 n/cm2/s is parts in a trillion.
 
 The **flux-weighted isomeric branching** comes from the same place,
 `get_isomeric_branching`, and is the number that says whether a disagreement
@@ -341,23 +349,22 @@ production and printed for every channel that lands in more than one final
 state. That is the number that says whether a
 disagreement belongs to a cross section or to a branching ratio, and it is not
 in the chain file: the dominant tungsten channel carries a placeholder `0.0`
-there, which the energy-dependent overlay replaces at solve time. A run against
-yani older than 0.9.0 files no rates, and the page then falls back to the
-unweighted order and says so.
+there, which the energy-dependent overlay replaces at solve time. A run that carries no rates gets a page saying so and asking for a re-run,
+rather than a table of zeros.
 
 The **nuclide E/C analysis** under the C/E table names the products that could
 account for a disagreement: each one's largest share of the calculation, when
 it reaches it, and the E/C there. The E/C is the total at that cooling point,
 not the product's own, because the measurement is a calorimeter reading and
 does not come apart by nuclide. What makes the row worth reading is the share
-beside it: an E/C of 0.51 at a point where one product is 98% of the
+beside it: an E/C of 0.40 at a point where one product is 98% of the
 calculation is a statement about that product.
 
 ### The uncertainty on the calculated value
 
 The last column of that table, `%ΔCnuc`, and the `+/- 6%` the published reports
 print beside every calculated µW/g, are both cross-section covariance carried
-through the inventory. Neither was reachable until yani 0.11.1 and both are now
+through the inventory. Neither was reachable until YANI 0.11.1 and both are now
 filled.
 
 Step 1 writes the MF=33 covariance as a `covariance.arrow` beside each nuclide.
@@ -379,11 +386,11 @@ Two things about that number are worth knowing before it is used.
 It is **the activation cross sections**, in practice and not by construction.
 Half-lives, decay branching ratios, fission yields and the isomeric-branching
 overlay are held at their evaluated values. The flux is the one that could move
-and does not: yani 0.12.0 perturbs the spectrum as a second source and asks for
+and does not: YANI 0.12.0 perturbs the spectrum as a second source and asks for
 both by default (`DataUncertainty.available_sources()` returns
 `['cross_sections', 'flux_spectrum']`), but the FNS benchmark publishes its
 measured spectrum as 709 group fluxes with no sigma on them, so there is nothing
-to draw from and the source contributes exactly zero. yani counts that rather
+to draw from and the source contributes exactly zero. YANI counts that rather
 than passing over it: `spectra_without_flux_sigma` is 1 on every run here.
 
 The distinction matters because those are different statements. A flux held
@@ -394,7 +401,7 @@ did not propagate rather than leaving that to be assumed.
 
 A **sigma of zero is not a claim of certainty**. An evaluation that states no
 MF=33 is perturbed by nothing and its products come back exact, which on the
-page is indistinguishable from a product that is well determined. yani counts
+page is indistinguishable from a product that is well determined. YANI counts
 those nuclides, step 2 names them, and the report page prints a note under the
 table rather than letting the column read as coverage it does not have. The
 tables also print `<1%` rather than `0%` for a small non-zero spread, so that
@@ -410,7 +417,7 @@ what that product's cross sections can account for.
 
 ## What comes out
 
-For iron on the default experiment, yani tracks the measurement to 6.0% mean
+For iron on the default experiment, YANI tracks the measurement to 6.0% mean
 deviation, starting on top of it and drifting high by the end of the hour, with
 a median C/E of 1.064 against a measurement whose own median sigma is 5.4%. Run
 the same iron against `1996exp_5min` and it comes out low instead, median C/E
@@ -432,7 +439,7 @@ unmissable. The same foil, the same spectrum, the same solver, on
 
 | library | median C/E | mean deviation | data sigma | isotopes with MF=33 | rate covered |
 |---|---|---|---|---|---|
-| tendl-2025 | 1.064 | 6.0% | **33%** | 4 of 4 | 99.9% |
+| tendl-2025 | 1.064 | 6.0% | **32.4%** | 4 of 4 | 99.9% |
 | jeff-4.0 | 1.060 | 5.5% | **1.2%** | 4 of 4 | 99.5% |
 | endf-b8.1 | 1.057 | 4.9% | **1.2%** | 2 of 4 | 95.6% |
 | jendl-5.0 | 1.094 | 8.8% | **4.9%** | 2 of 4 | 89.2% |
@@ -445,7 +452,7 @@ and are wide; ENDF/B-VIII.1's Fe56 is one of the most measured cross sections
 there is and its covariance is correspondingly tight.
 
 Read the sigma against the deviation and they say different things: a 6%
-deviation against a 33% sigma is a foil that library cannot resolve, and the
+deviation against a 32.4% sigma is a foil that library cannot resolve, and the
 same 6% against a genuine 1.2% would be a real disagreement.
 
 **The last column is the one that decides whether the sigma beside it means
@@ -473,9 +480,10 @@ so "5 of 5" is true and reads as complete coverage. What they state it for is
 `(n,3n)` and `(n,gamma)`. The `W186(n,2n)W185m` that makes 98% of this foil's
 decay heat has no MF=33 at all, so the ensemble perturbs 5.6% of the production
 and reports a spread of under 0.1%: the most confident number in the table and
-the least earned. yani files the per-channel coverage as
-`rate_fraction_covered`, step 2 folds it against its own reaction rates and the
-foil's own densities, and the report page says so under any table whose
+the least earned. YANI files the per-channel coverage as
+`rate_fraction_covered`, folds it against the reaction rates and the parent
+densities itself, and files the total as `rate_fraction_covered_total`; step 2
+reads that and prints it, and the report page says so under any table whose
 covariance spans less than 90% of the production.
 
 Both weights are load-bearing. Weighting by rate alone, without the density of
@@ -496,9 +504,8 @@ Swapping the cross sections for another library, with everything else held
 fixed, turns this into a library comparison:
 
 ```bash
-python convert_to_arrow.py --endf-dir /path/to/endfb-8.1 --library endf-b8.1 \
-    --output data/b81
-python run_transmutation.py --cross-sections data/b81 --output results/b81
+python convert_to_arrow.py  --endf-dir /path/to/endfb-8.1 --library endf-b8.1 --source b81
+python run_transmutation.py --source b81
 ```
 
 ### Four libraries at once
@@ -508,7 +515,7 @@ ENDF on your own machine:
 
 ```bash
 for lib in tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0; do
-  python convert_to_arrow.py  --case W --endf-dir /path/to/$lib --source $lib
+  python convert_to_arrow.py  --case W --endf-dir /path/to/$lib --library $lib --source $lib
   python run_transmutation.py --case W --source $lib
 done
 python make_report.py --case W --libraries tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0
@@ -558,7 +565,7 @@ apart is reporting something other than the data.
   is not much reason to, since it costs no measurable NJOY time and 4% more
   disk. An evaluation that carries no MF=33 writes none, and step 1 says which.
 
-  It has to come from the ENDF, so an Arrow directory converted before yani
+  It has to come from the ENDF, so an Arrow directory converted before YANI
   0.11.0 does not have it and cannot be given it without rerunning NJOY. Step 2
   against one of those does not fail and does not report zero: it says no
   covariance was available and names the reconversion, and the report leaves
@@ -574,8 +581,8 @@ time off endf-b8.1 and onto the library the cross sections came from:
 | Ti | 2.4% | 2.2% | **2.2%** | Sc50 |
 | Fe | 5.3% | 5.7% | **6.0%** | Mn56 |
 | Ag | 69.7% | 9.0% | **9.0%** | Ag108 |
-| Nb | 81.4% | 10.8% | **10.8%** | **Nb94m**, 92% of the heat |
-| W | 75.9% | 121.5% | **122.0%** | **W185m**, 97% of the heat |
+| Nb | 81.4% | 10.8% | **10.8%** | **Nb92m**, 59% of the heat |
+| W | 75.9% | 121.5% | **122.0%** | **W185m**, 98% of the heat |
 
 Note which way some of these move. Fe gets worse at every step, and the last
 column is the honest number for TENDL-2025 on iron precisely because it is the
@@ -591,7 +598,7 @@ branching with another's cross sections.
 The topology is worth much less on these five. The channels it adds are mostly
 minor routes to products the foil already makes: iron's extra 20 channels move
 the heat by 0.3%, all of it more Mn56 and Mn57 arriving by (n,d) and (n,np) on
-Fe57 rather than only by (n,p) on Fe56, and tungsten's move it by up to 0.8%,
+Fe57 and Fe58 rather than only by (n,p) on Fe56 and Fe57, and tungsten's move it by up to 0.8%,
 mostly more Ta185. Ti, Ag and Nb do not move at the printed precision. It is
 worth doing anyway because it is one more thing the answer no longer borrows,
 and on a foil whose heat runs through an unusual channel it would not be small.
@@ -645,7 +652,7 @@ Three things go in, per experiment:
   of a deck is solver settings and output requests, which mean nothing here, so
   no FISPACT input reader is needed.
 
-The cooling steps yani takes are the intervals between measured points rather
+The cooling steps YANI takes are the intervals between measured points rather
 than the deck's own steps, which is why the deck's cooling schedule is read at
 build time but not carried into the JSON. The two are meant to agree and nearly
 always do, but a few decks drift from their measurement (`Co/1996exp_5min` stops
@@ -664,7 +671,7 @@ energy each decay releases.
   state it is made in, and the **reaction topology**, which says which reaction
   on which parent gives which product at all. All three come out of the same
   neutron evaluations, so all three move together when you change library.
-* From endf-b8.1, downloaded by yani on first use: the **decay data**, meaning
+* From endf-b8.1, downloaded by YANI on first use: the **decay data**, meaning
   half-lives, decay modes and **decay energies**.
 
 The split is not arbitrary, and it is drawn where the data runs out rather than

@@ -19,9 +19,9 @@ reported and the sweep carries on.
 Conversion is reused rather than repeated. The 73 foils are made of 255 distinct
 isotopes between them but name 441, because Fe56 belongs to iron, to both steels,
 to Inc600 and to NiCr; convert_to_arrow.py skips an isotope already converted
-under the same library, so the sweep pays for each one once. Pass `--force`
-through to it after changing a conversion setting, which the output cannot be
-distinguished by.
+under the same library, so the sweep pays for each one once. `--force` passes
+that flag through, which is what to do after changing a conversion setting the
+output cannot be distinguished by, such as `--temperature`.
 
 NJOY writes its scratch wherever `TMPDIR` points, and on many Linux systems that
 is `/tmp` on a tmpfs sized against RAM. A sweep is thousands of NJOY runs, so
@@ -143,6 +143,9 @@ def main():
     parser.add_argument("--output", type=pathlib.Path, default=None,
                         help="where the per-foil results and the table go "
                              "(default: results/<source>/sweep)")
+    parser.add_argument("--force", action="store_true",
+                        help="pass --force to the converter, reconverting "
+                             "isotopes already converted under this library")
     parser.add_argument("--source", default=None,
                         help="folder name to file this run's data and results under "
                              "(default: the library name, or the --endf-dir directory name)")
@@ -178,12 +181,15 @@ def main():
     #
     # One directory per foil rather than one rebuilt in place. The sweep alone
     # would be fine either way, since it converts and runs a foil before moving
-    # on, but what it leaves behind is read later: make_report.py picks the
-    # chain up off disk long afterwards, and a single path holds only whichever
-    # foil the sweep happened to finish on.
+    # on, but what it leaves behind is read later: run_transmutation.py re-run
+    # by hand against a foil the sweep converted earlier infers
+    # data/<source>/chain-<case> from the neutron path, and a single rebuilt
+    # path would hold only whichever foil the sweep happened to finish on.
     converter_args = ["--library", args.library,
                       "--source", source,
                       "--output", str(args.cross_sections)]
+    if args.force:
+        converter_args.append("--force")
     if args.endf_dir is not None:
         converter_args += ["--endf-dir", str(args.endf_dir)]
     if args.tarball is not None:

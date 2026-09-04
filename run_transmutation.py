@@ -57,11 +57,14 @@ ROUTE_PRODUCT_FLOOR = 0.001
 #
 # One reaction is what the published pathway pages carry, and what these
 # irradiations can support. A second reaction step costs another factor of the
-# fluence, and at 1e10 n/cm2/s for five minutes that is a fluence of 3e12, so a
-# two-step route arrives at parts in a billion of a one-step one.
+# cross section times the fluence, and at 1e10 n/cm2/s for five minutes that is
+# a fluence of 3e12, so a two-step route arrives at parts in a trillion of a
+# one-step one.
 #
-# Three decay steps covers what these reach: the longest route the published
-# pages carry is W182(n,p)Ta182n(IT)Ta182m(IT)Ta182, which is three.
+# Three decay steps covers what these reach. The longest route the published
+# pages carry, W182(n,p)Ta182n(IT)Ta182m(IT)Ta182, is two of them, and the third
+# is there for the routes the solve turns up beyond the published set, such as
+# W186(n,p)Ta186(BETA-)W186(ALPHA)Hf182(BETA-)Ta182.
 ROUTE_REACTION_STEPS = 1
 ROUTE_DECAY_STEPS = 3
 
@@ -296,6 +299,7 @@ def run(case, cross_sections, chain, uncertainty=None):
     # state it lands in, which is energy dependent and decides the answer
     # outright for foils whose heat comes from an isomer).
     have = subsections_of(chain)
+    applied = {}
     for subsection, setting, warning in [
         ("branching", "transmutation_branch_ratios",
          "isomer-dominated foils will be off; rerun without --no-branching"),
@@ -391,8 +395,8 @@ def run(case, cross_sections, chain, uncertainty=None):
             sigma, by_nuclide_sigma = ensemble
 
     # The rate of every production edge the solve drove, which yani-core 0.9.0
-    # hands back and earlier versions computed and threw away
-    # (fusion-neutronics/core#505). Summed over the irradiation pulses and
+    # hands back and earlier versions computed and threw away. Summed over the
+    # irradiation pulses and
     # weighted by their duration, so an edge carries the production it drove per
     # atom of its parent over the whole irradiation, which is what weights a
     # route. Cooldown steps drive no reactions and contribute nothing.
@@ -600,7 +604,7 @@ def main():
                         help="Arrow directory from convert_to_arrow.py "
                              "(default: data/<source>/neutron)")
     parser.add_argument("--chain", type=pathlib.Path, default=None,
-                        help="branching subsection from convert_to_arrow.py "
+                        help="branching and reaction subsections from convert_to_arrow.py "
                             "(default: data/<source>/chain-<case>, or the sibling "
                             "of --cross-sections when it ends with /neutron)")
     parser.add_argument("--output", type=pathlib.Path, default=None,
