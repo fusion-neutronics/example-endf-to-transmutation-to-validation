@@ -19,10 +19,14 @@ decay-heat validation report conventionally uses:
     production pathways      the reaction and decay steps that make each
                              product, over as many pages as they need
     figure page              heat curves and % contributions, one row per library
+    nuclear data used        which library each part of the network came from,
+                             one column per library, read from each run's own
+                             record of what it loaded
 
-The last three repeat per campaign; the comparison page carries all of them at
-once, so the campaigns can be read against each other. One foil is one
-document, and that is the point of binding it this way. A foil
+The C/E table, the pathways and the figure page repeat per campaign. The
+comparison page carries all of the campaigns at once, so they can be read
+against each other, and the nuclear data page is one per document and comes
+last. One foil is one document, and that is the point of binding it this way. A foil
 measured more than once is still one subject, and the spread between its
 campaigns is a result about the data rather than about any one measurement:
 iron reads 6% high against ``2000exp_5min`` and 7% low against
@@ -87,9 +91,9 @@ recorded here because the reason each one was empty says what it is:
   carries 98% of the decay heat at the first cooling point, and without it 10%.
   The split the solve actually used is now printed rather than inferred.
 
-That is why this script needs yani 0.11.1 or newer. It still reads a result
-filed by an older run: one with no per-edge rates falls back to the unweighted
-route order and says so rather than printing zeros, and one with no sigma leaves
+That is why this script needs YANI 0.11.1 or newer. It still reads a result
+filed by an older run: one with no production routes gets a page saying so and
+asking for a re-run rather than a table of zeros, and one with no sigma leaves
 the two uncertainty columns empty rather than at zero. What it will not do is
 invent either from what is there.
 
@@ -116,6 +120,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -194,8 +199,9 @@ FAINT_INK = "#bfbfbf"
 #
 # Note this is a peak share, not a share of the heat summed over the cooling
 # steps. Summed heat is dominated by the early high-heat points, so ranking on
-# it buries any product that peaks late: on W/2000exp_5min it puts Ta184 tenth
-# despite Ta184 carrying 18% of the heat at one point.
+# it buries any product that peaks late: on W/2000exp_5min it puts W185 tenth
+# despite W185 reaching 2.6% of the heat, three places below where its peak
+# share ranks it.
 SHARE_FLOOR = 0.002
 
 # The share of the calculation a product needs to earn a line in the nuclide
@@ -221,9 +227,9 @@ ROUTES_SHOWN = 6
 # 2%, which this is well under; it is set to drop what rounds to zero in the
 # column rather than to second-guess which small routes are interesting.
 #
-# Only applied when the result carries per-edge rates. Without them there is no
-# share to compare against and every route stands, which is the same fallback
-# the ordering takes.
+# Applied to every route, since yani files a share with each one. The largest
+# route survives it whatever its share, so a product is never left with no
+# pathway at all.
 ROUTE_SHARE_FLOOR = 0.001
 
 # Clearance kept under the last block on a page, above the page number.
@@ -290,16 +296,23 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
     chain root, so one symlink and a manifest stand it up. `chain` overrides all
     of it, for a chain that carries its own ``decay/``.
 
-    Returns the mapping and the temporary directory to clean up, or ``({}, None)``
-    when there is nothing to read: the column is then left blank, which is what
-    it did before and is better than a report that refuses to build over it.
+    Returns the mapping, the temporary directory to clean up, and the name of
+    the sublibrary it came from, or ``({}, None, None)`` when there is nothing to
+    read: the column is then left blank, which is what it did before and is
+    better than a report that refuses to build over it. The name is returned
+    rather than assumed by the caller because the decay page states it, and a
+    page that names a library the half-lives did not come from is worse than one
+    that names none.
     """
     try:
         import yani
 
         if chain is not None and (chain / "decay").is_dir():
             print(f"half-lives: {chain}")
-            return dict(yani.TransmutationChain(str(chain)).half_lives), None
+            named = json.loads((chain / "manifest.json").read_text()).get("library") \
+                if (chain / "manifest.json").is_file() else None
+            return (dict(yani.TransmutationChain(str(chain)).half_lives), None,
+                    named or str(chain))
 
         borrowed = cache / f"{decay}-transmutation-decay.arrow"
         if not borrowed.is_dir():
@@ -307,7 +320,7 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
                   f"left blank.\n"
                   f"            Convert the decay sublibrary first, or pass "
                   f"--chain a directory that has its own decay/.")
-            return {}, None
+            return {}, None, None
 
         # Held open for as long as the chain is read, and removed after.
         composed = tempfile.TemporaryDirectory(prefix="yani-report-decay-")
@@ -320,10 +333,10 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
         }))
         loaded = dict(yani.TransmutationChain(str(root)).half_lives)
         print(f"half-lives: {len(loaded)} from {borrowed.name}")
-        return loaded, composed
+        return loaded, composed, decay
     except Exception as error:  # noqa: BLE001 - the column is optional
         print(f"half-lives: unreadable ({error}). The T1/2 column is left blank.")
-        return {}, None
+        return {}, None, None
 
 
 def edge_weights(result):
@@ -331,7 +344,8 @@ def edge_weights(result):
 
     Written by run_transmutation.py from ``get_reaction_rates``, which arrived
     with yani-core 0.9.0. Absent from results filed before that, and absent for
-    a decay-only run, in which case the routes fall back to being unweighted.
+    a decay-only run, in which case the isomeric branching block has nothing to
+    rank.
     """
     out = {}
     for row in result.get("edge_rates") or []:
@@ -582,13 +596,22 @@ def load_results(case, experiment, libraries, results_root):
     """
     found, missing = [], []
     for library in libraries:
-        for root in (results_root / library / "sweep", results_root / library):
-            path = root / f"fns_{case}_{experiment}.json"
-            if path.is_file():
-                found.append((library, json.loads(path.read_text())))
-                break
-        else:
+        filed = [root / f"fns_{case}_{experiment}.json"
+                 for root in (results_root / library / "sweep", results_root / library)
+                 if (root / f"fns_{case}_{experiment}.json").is_file()]
+        if not filed:
             missing.append(library)
+            continue
+        # Newest wins. A sweep and a single run both file under one library, and
+        # taking a fixed one of the two means a foil re-run minutes ago is passed
+        # over for a sweep from last week without saying so. This report is meant
+        # to be unable to disagree with the run it came from, and quietly reading
+        # the older of two files is precisely how it would.
+        path = max(filed, key=lambda candidate: candidate.stat().st_mtime)
+        if len(filed) > 1:
+            print(f"{library}: {case}/{experiment} is filed twice, reading the "
+                  f"newer {path.relative_to(results_root)}")
+        found.append((library, json.loads(path.read_text())))
     if missing:
         print(f"no {case}/{experiment} result for: {', '.join(missing)}")
     if not found:
@@ -607,7 +630,8 @@ def score(result):
     ``mean % diff. from E`` is the mean of |C/E - 1|, and ``mean chi^2`` divides
     by the measurement's own sigma, so it says whether a deviation is larger
     than the experiment can resolve. Both are the report's definitions: neither
-    carries an uncertainty on the calculated value, because there is not one.
+    folds in the calculated value's own sigma, which is printed beside it and
+    drawn as a band instead.
     """
     measured = np.array(result["measured_uW_per_g"], dtype=float)
     sigma = np.array(result["measured_uncertainty"], dtype=float)
@@ -658,7 +682,7 @@ def nuclide_analysis(result, half_lives, floor=NUCLIDE_EC_FLOOR):
     is a calorimeter reading and does not come apart by nuclide, so there is no
     such thing as one product's E/C, and printing the total against every row
     would be four columns of the same number. What makes a row worth reading is
-    the share beside it: an E/C of 0.51 at a point where one product is 98% of
+    the share beside it: an E/C of 0.40 at a point where one product is 98% of
     the calculation is a statement about that product, and the published table
     prints exactly one row for tungsten's 5 minute irradiation for that reason.
 
@@ -897,8 +921,20 @@ def volume_cover_page(pdf, cases, libraries, title, subtitle, number, total):
     plt.close(figure)
 
 
+def is_element(case):
+    """Whether a foil is one element, as against one of the benchmark's alloys.
+
+    Asked of yani's element table rather than pattern-matched on the name, so
+    Inc600, NiCr, SS304 and SS316 are the four that answer no without this file
+    holding a list of them that a new alloy would fall off.
+    """
+    import yani.data
+
+    return case in yani.data.element_names()
+
+
 def summary_rows(entries):
-    """One ranking row per foil, worst deviation last.
+    """One ranking row per foil, worst deviation last, alloys after the elements.
 
     Ranked on the primary library's mean deviation, and read against the two
     sigmas beside it rather than on its own: a foil 30% out that was measured to
@@ -906,6 +942,13 @@ def summary_rows(entries):
     are known to 30%. Ordered worst last because the point of running every foil
     is to find where the library falls over, and the end of a list is where the
     eye stops.
+
+    The alloys go in their own block at the end rather than ranked among the
+    elements. A deviation on SS316 is a statement about six elements at once and
+    about the weights they were mixed in, so it does not compare with one on a
+    single-element foil, and a reader running down the column looking for the
+    cross section to blame cannot use it the same way. Within each block the
+    ranking is the same.
     """
     rows = []
     for case, sections in entries:
@@ -914,7 +957,7 @@ def summary_rows(entries):
         values = score(result)
         ratio = np.array(result["ratio"], dtype=float)
         percent = uncertainty_percent(result)
-        rows.append((values["mean_percent_diff"], [
+        rows.append(((not is_element(case), values["mean_percent_diff"]), [
             case,
             f"{len(sections)}",
             f"{np.nanmedian(ratio):.3f}",
@@ -923,7 +966,7 @@ def summary_rows(entries):
             f"{result['median_measurement_sigma_percent']:.1f}",
             f"{values['mean_chi2']:.2f}",
         ]))
-    return [row for _deviation, row in sorted(rows, key=lambda r: r[0])]
+    return [row for _rank, row in sorted(rows, key=lambda r: r[0])]
 
 
 def summary_pages(pdf, entries, title, subtitle, number, total):
@@ -1177,14 +1220,15 @@ def isomeric_split_rows(primary):
 def pathway_preamble(weighted_any, dropped):
     """What the routes table means, and what it left out."""
     if not weighted_any:
-        return ("These results carry no production routes. They come from yani, "
+        return ("These results carry no production routes. They come from YANI, "
                 "which step 2\nasks for them and files them beside the heat; a "
                 "result filed by an older step 2\nhas none. Re-run it to fill "
                 "this page.")
 
-    text = ("Routes are yani's own answer, walked from the nuclides the foil "
-            "started with\nover the library's topology and decay data, one "
-            "reaction step and then along\nthe decay chain. They are ordered by "
+    text = ("Routes are YANI's own answer, walked from the nuclides the foil "
+            "started with\nover the library's own topology and the shared decay "
+            "data named on the last\npage, one reaction step and then along "
+            "the decay chain. They are ordered by "
             "\"path\", the share of the product's\nproduction arriving down each "
             "route: the atoms the route starts from, times\nwhat its reaction "
             "drove per atom of its parent over the irradiation, times the\n"
@@ -1434,7 +1478,7 @@ def draw_heat(axes, case, library, result, values, products, colours, fontsize=6
     axes.set_ylabel("Heat Output [µW/g]", fontsize=fontsize)
     axes.set_title(f"FNS {result['experiment']} - {case} - {library_label(library)}",
                    fontsize=fontsize + 1.0)
-    _finish_panel(axes, fontsize)
+    _finish_panel(axes, fontsize, banded=spread is not None)
 
 
 def draw_comparison(axes, case, results, colours, fontsize=6.5):
@@ -1500,7 +1544,9 @@ def draw_comparison(axes, case, results, colours, fontsize=6.5):
     axes.set_ylabel("Heat Output [µW/g]", fontsize=fontsize)
     axes.set_title(f"FNS {results[0][1]['experiment']} - {case} - all libraries",
                    fontsize=fontsize + 1.0)
-    _finish_panel(axes, fontsize)
+    _finish_panel(axes, fontsize,
+                  banded=any(uncertainty_of(result) is not None
+                             for _library, result in results))
 
 
 def comparison_page(pdf, case, sections, colours, title, subtitle, number, total):
@@ -1579,10 +1625,24 @@ def draw_share(axes, case, library, result, products, colours, fontsize=6.5):
     _finish_panel(axes, fontsize)
 
 
-def _finish_panel(axes, fontsize):
-    """The legend outside the axes and the grid, shared by both panel kinds."""
+def _finish_panel(axes, fontsize, banded=False):
+    """The legend outside the axes and the grid, shared by both panel kinds.
+
+    ``banded`` adds an entry for the shaded band. matplotlib gives
+    ``fill_between`` no legend entry of its own here, since labelling one band
+    per library would repeat the library names already in the legend in a second
+    swatch each. One grey proxy says what all of them are instead, because a
+    shaded area nothing in the legend accounts for is read as whatever the
+    reader already expects, and on a decay heat plot that is counting statistics
+    rather than the cross-section covariance this actually is.
+    """
     axes.tick_params(labelsize=fontsize - 0.5)
-    axes.legend(fontsize=fontsize - 1.5, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+    handles, labels = axes.get_legend_handles_labels()
+    if banded:
+        handles.append(Patch(facecolor="#666666", alpha=BAND_ALPHA, linewidth=0))
+        labels.append("+/- 1$\\sigma$ nuclear data")
+    axes.legend(handles, labels,
+                fontsize=fontsize - 1.5, loc="upper left", bbox_to_anchor=(1.01, 1.0),
                 frameon=False, handlelength=1.5, borderpad=0.2, labelspacing=0.28)
     axes.grid(alpha=0.25, linewidth=0.4)
 
@@ -1637,6 +1697,100 @@ def figure_page(pdf, case, results, title, subtitle, number, total):
         draw_share(figure.add_subplot(share_cell), case, library, result,
                    products, colours)
 
+    pdf.savefig(figure)
+    plt.close(figure)
+
+
+# What a cell says when the run turned that subsection off outright.
+OFF_LABEL = "not used"
+
+# What the provenance page lists, in the order a reader meets it: the neutron
+# side first, because that is what `--library` moves, then the decay side, which
+# never moves. The MF numbers are on the page because they are what makes the
+# claim checkable against the evaluation itself.
+PROVENANCE_PARTS = [
+    ("cross_sections", "Cross sections and covariance (MF=3, MF=33)"),
+    ("reactions", "Reaction topology"),
+    ("branching", "Isomeric branching (MF=9, MF=10)"),
+    ("decay_data", "Decay data (half-lives, modes, energies)"),
+    ("fission_yields", "Fission yields"),
+]
+
+
+def provenance_rows(groups, libraries, decay_used):
+    """One row per part of the network, one cell per library.
+
+    Read out of each result's own record of what it loaded. A run that filed no
+    record contributes no name; a cell nobody named is left empty, and every
+    library with at least one such run is listed under the table. The
+    alternative is reading the library off the folder name, and the folder name
+    is exactly the thing that can be wrong.
+
+    A cell carries more than one name when the runs behind that column disagree,
+    which a single foil cannot do but a volume can: two foils converted at
+    different times can sit under one library column. Joined rather than reduced
+    to the first, since a column that quietly showed one of two answers would be
+    the failure this page exists to prevent.
+    """
+    rows, missing = [], set()
+    for key, label in PROVENANCE_PARTS:
+        row = [label]
+        for library in libraries:
+            named = set()
+            for sections in groups:
+                for _experiment, results in sections:
+                    for name, result in results:
+                        if name != library:
+                            continue
+                        record = (result.get("nuclear_data") or {}).get(key)
+                        # A subsection turned off is a third answer, and not the
+                        # same as one nobody recorded: it says the run decided it
+                        # was not needed, which is a claim the page should carry.
+                        if record and record.get("off"):
+                            named.add(OFF_LABEL)
+                        elif record and record.get("library"):
+                            named.add(library_label(record["library"]))
+                        else:
+                            missing.add(library)
+            row.append(" / ".join(sorted(named)))
+        rows.append(row)
+
+    # Not one of the run's settings: the T1/2 column is filled at report time
+    # from the decay sublibrary, so it is ruled off from the rows above it.
+    rows.append(["Half-lives on these pages",
+                 *[library_label(decay_used) if decay_used else "" for _ in libraries]])
+
+    return rows, sorted(missing)
+
+
+def provenance_note(missing, decay_used):
+    """One line on why the decay rows do not follow the column heading."""
+    decayed = library_label(decay_used) if decay_used else "a decay sublibrary"
+    text = textwrap.wrap(
+        "Decay data is not something a neutron evaluation carries, so the "
+        f"simulations take it from {decayed} in every column to make a complete "
+        "set of nuclear data inputs.", 104)
+    if missing:
+        text += textwrap.wrap(
+            "Not every run behind these columns recorded what it loaded: "
+            + ", ".join(library_label(name) for name in missing)
+            + ". A cell nobody named is left empty rather than filled in from "
+            "the folder it was read from. Re-run step 2 to fill them.", 104)
+    return "\n".join(text)
+
+
+def provenance_page(pdf, heading, groups, libraries, decay_used,
+                    title, subtitle, number, total):
+    """The last page: which library each part of the network actually came from."""
+    figure = page(pdf, title, subtitle, number, total)
+    figure.text(0.08, 0.905, heading, fontsize=11)
+    rows, missing = provenance_rows(groups, libraries, decay_used)
+    columns = [("Part of the network", "", "l", 2.7)] + [
+        (library_label(library), "", "l", 1.0) for library in libraries]
+    bottom = table(figure, columns, rows, PATHWAY_TOP,
+                   rules_after={len(rows) - 2})
+    figure.text(0.08, bottom - 0.024, provenance_note(missing, decay_used),
+                va="top", fontsize=7.6, color="#555555")
     pdf.savefig(figure)
     plt.close(figure)
 
@@ -1697,6 +1851,10 @@ def write_data(out, case, sections, half_lives):
                 "mean_percent_diff": score(result)["mean_percent_diff"],
                 "mean_chi2": score(result)["mean_chi2"],
                 "data_uncertainty_info": result.get("data_uncertainty_info"),
+                # The last page's table, per library per campaign and unaggregated,
+                # so a reader who wants to know what a number was computed from
+                # does not have to read it off a PDF.
+                "nuclear_data": result.get("nuclear_data"),
             } for library, result in results],
             "nuclide_analysis": nuclide_analysis(primary, half_lives),
             "pathways": pathway_data(primary, half_lives),
@@ -1750,7 +1908,7 @@ def prepare(case, experiments, libraries, results_root, half_lives):
     if not any(result.get("production_routes")
                for _experiment, results in sections for _library, result in results):
         note = ("These results carry no production routes. They were filed by a "
-                "step 2 older than yani 0.13.0, which is where the routes come "
+                "step 2 older than YANI 0.13.0, which is where the routes come "
                 "from; rerun it to fill this page.")
 
     layouts = [pathway_layout(results, note, half_lives)
@@ -1802,20 +1960,24 @@ def build(case, experiments, libraries, results_root, chain, decay, out,
     in one document: the spread between its experiments is a result, and the
     published report binds them the same way.
     """
-    half_lives, composed = half_lives_from(decay, chain)
+    half_lives, composed, decay_used = half_lives_from(decay, chain)
     sections, layouts, pages = prepare(case, experiments, libraries,
                                        results_root, half_lives)
     filed = sections[0][1][0][1].get("production_routes") or {}
     print(f"pathways: {sum(len(v) for v in filed.values())} routes into "
           f"{len(filed)} products")
-    total = 1 + pages
+    # The cover, the foil's pages, and the nuclear data they were all made from.
+    total = 2 + pages
     colours = library_colours(libraries)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         cover_page(pdf, case, sections, title, subtitle, 1, total)
-        draw_case(pdf, case, sections, layouts, colours, half_lives,
-                  title, subtitle, 2, total)
+        number = draw_case(pdf, case, sections, layouts, colours, half_lives,
+                           title, subtitle, 2, total)
+        provenance_page(pdf, f"{element_name(case)}, nuclear data used",
+                        [sections], libraries, decay_used,
+                        title, subtitle, number, total)
         pdf.infodict()["Title"] = f"{title}: {element_name(case)}"
         pdf.infodict()["Subject"] = subtitle
 
@@ -1840,7 +2002,7 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
     on a sweep of 73 there will usually be a few, and losing the other 70 to one
     of them would be absurd.
     """
-    half_lives, composed = half_lives_from(decay, chain)
+    half_lives, composed, decay_used = half_lives_from(decay, chain)
 
     prepared, skipped = [], []
     for case in cases:
@@ -1862,7 +2024,7 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
 
     entries = [(case, sections) for case, sections, _l, _p in prepared]
     ranking = max(1, -(-len(entries) // SUMMARY_ROWS))
-    total = 1 + ranking + sum(pages for _c, _s, _l, pages in prepared)
+    total = 2 + ranking + sum(pages for _c, _s, _l, pages in prepared)
     colours = library_colours(libraries)
 
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1877,6 +2039,9 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
                 prepared, key=lambda item: order.get(item[0], 0)):
             number = draw_case(pdf, case, sections, layouts, colours, half_lives,
                                title, subtitle, number, total)
+        provenance_page(pdf, f"{len(prepared)} foils, nuclear data used",
+                        [sections for _c, sections, _l, _p in prepared],
+                        libraries, decay_used, title, subtitle, number, total)
         pdf.infodict()["Title"] = f"{title}: {len(prepared)} foils"
         pdf.infodict()["Subject"] = subtitle
 

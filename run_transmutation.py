@@ -57,11 +57,14 @@ ROUTE_PRODUCT_FLOOR = 0.001
 #
 # One reaction is what the published pathway pages carry, and what these
 # irradiations can support. A second reaction step costs another factor of the
-# fluence, and at 1e10 n/cm2/s for five minutes that is a fluence of 3e12, so a
-# two-step route arrives at parts in a billion of a one-step one.
+# cross section times the fluence, and at 1e10 n/cm2/s for five minutes that is
+# a fluence of 3e12, so a two-step route arrives at parts in a trillion of a
+# one-step one.
 #
-# Three decay steps covers what these reach: the longest route the published
-# pages carry is W182(n,p)Ta182n(IT)Ta182m(IT)Ta182, which is three.
+# Three decay steps covers what these reach. The longest route the published
+# pages carry, W182(n,p)Ta182n(IT)Ta182m(IT)Ta182, is two of them, and the third
+# is there for the routes the solve turns up beyond the published set, such as
+# W186(n,p)Ta186(BETA-)W186(ALPHA)Hf182(BETA-)Ta182.
 ROUTE_REACTION_STEPS = 1
 ROUTE_DECAY_STEPS = 3
 
@@ -103,6 +106,34 @@ def subsections_of(chain):
     if chain is None or not (chain / "manifest.json").is_file():
         return set()
     return set(json.loads((chain / "manifest.json").read_text()).get("subsections", {}))
+
+
+def library_of(root, nuclides=None):
+    """The library name the converted data on disk stamps itself with.
+
+    Read out of the data rather than taken from the directory name. `--source`
+    names a folder, and nothing stops a folder called one thing from holding
+    evaluations converted from another; a report that says which library a
+    number came from should be quoting the data and not the path.
+
+    A chain says so in its manifest. A neutron directory says so once per
+    nuclide, and only the foil's own nuclides are asked, because that directory
+    accumulates every nuclide ever converted into it and the ones this run did
+    not read have no bearing on this run.
+    """
+    root = pathlib.Path(root)
+    manifest = root / "manifest.json"
+    if manifest.is_file():
+        return json.loads(manifest.read_text()).get("library") or None
+    stamped = set()
+    for nuclide in nuclides or []:
+        version = root / f"{nuclide}.arrow" / "version.json"
+        if version.is_file():
+            stamped.add(json.loads(version.read_text()).get("library"))
+    stamped.discard(None)
+    # Joined rather than reduced to one name: a directory holding two libraries
+    # is a thing worth seeing on the page, not a thing to pick a winner from.
+    return " + ".join(sorted(stamped)) or None
 
 
 def decay_heat_spread(results, material_id, case, steps, keys):
@@ -251,7 +282,15 @@ def run(case, cross_sections, chain, uncertainty=None):
     """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
     yani.cross_section_data = str(cross_sections)
     yani.transmutation_decay_data = DECAY_LIBRARY
-    yani.transmutation_fission_yields = DECAY_LIBRARY
+
+    # Off, rather than pointed at a library. Nothing in any of the 73 FNS foils
+    # fissions, so a yield source would never be read, and naming one anyway put
+    # a library on the report's provenance page that contributed nothing to the
+    # answer. `False` is yani's own setting for this and is not the same as
+    # leaving it unset: unset falls back to a default library, whereas off means
+    # a fission rate that did need yields is refused when the burnup matrix is
+    # built, naming the nuclide, rather than quietly losing its fission products.
+    yani.transmutation_fission_yields = False
 
     # Everything a neutron evaluation states is taken from the one the cross
     # sections came from, so that the whole reaction side of the network moves
@@ -260,6 +299,7 @@ def run(case, cross_sections, chain, uncertainty=None):
     # state it lands in, which is energy dependent and decides the answer
     # outright for foils whose heat comes from an isomer).
     have = subsections_of(chain)
+    applied = {}
     for subsection, setting, warning in [
         ("branching", "transmutation_branch_ratios",
          "isomer-dominated foils will be off; rerun without --no-branching"),
@@ -269,9 +309,11 @@ def run(case, cross_sections, chain, uncertainty=None):
         if subsection in have:
             setattr(yani, setting, str(chain))
             print(f"{subsection}: {chain}")
+            applied[subsection] = {"library": library_of(chain), "path": str(chain)}
         else:
             setattr(yani, setting, DECAY_LIBRARY)
             print(f"{subsection}: {DECAY_LIBRARY} ({warning})")
+            applied[subsection] = {"library": DECAY_LIBRARY, "path": None}
 
     # The histogram is a shape; the pulse rate carries the magnitude.
     spectrum = yani.NeutronSource(
@@ -293,6 +335,21 @@ def run(case, cross_sections, chain, uncertainty=None):
     )
     nuclides = sorted(material.get_nuclide_names())
     print(f"material: {len(nuclides)} nuclides, {' '.join(nuclides)}")
+
+    # What every part of the network was read from, recorded so the report can
+    # state it instead of assuming it. No run here is on one library: the
+    # neutron side moves with `--library`, the decay side never does, because no
+    # neutron evaluation carries half-lives, decay modes or decay energies.
+    # Naming both is the only way a reader can tell which of the two a
+    # library-to-library difference belongs to.
+    provenance = {
+        "cross_sections": {"library": library_of(cross_sections, nuclides),
+                           "path": str(cross_sections)},
+        "reactions": applied.get("reactions"),
+        "branching": applied.get("branching"),
+        "decay_data": {"library": DECAY_LIBRARY, "path": None},
+        "fission_yields": {"library": None, "path": None, "off": True},
+    }
 
     # A chain left over from a different foil carries no reactions for these
     # nuclides and used to solve to an inventory of nothing, which surfaced only
@@ -338,8 +395,8 @@ def run(case, cross_sections, chain, uncertainty=None):
             sigma, by_nuclide_sigma = ensemble
 
     # The rate of every production edge the solve drove, which yani-core 0.9.0
-    # hands back and earlier versions computed and threw away
-    # (fusion-neutronics/core#505). Summed over the irradiation pulses and
+    # hands back and earlier versions computed and threw away. Summed over the
+    # irradiation pulses and
     # weighted by their duration, so an edge carries the production it drove per
     # atom of its parent over the whole irradiation, which is what weights a
     # route. Cooldown steps drive no reactions and contribute nothing.
@@ -419,7 +476,7 @@ def run(case, cross_sections, chain, uncertainty=None):
     branching = results.get_isomeric_branching(material_id, 0) or {}
 
     return (heat, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
-            info, routes, branching)
+            info, routes, branching, provenance)
 
 
 def summarise(case, calculated):
@@ -547,7 +604,7 @@ def main():
                         help="Arrow directory from convert_to_arrow.py "
                              "(default: data/<source>/neutron)")
     parser.add_argument("--chain", type=pathlib.Path, default=None,
-                        help="branching subsection from convert_to_arrow.py "
+                        help="branching and reaction subsections from convert_to_arrow.py "
                             "(default: data/<source>/chain-<case>, or the sibling "
                             "of --cross-sections when it ends with /neutron)")
     parser.add_argument("--output", type=pathlib.Path, default=None,
@@ -630,7 +687,7 @@ def main():
         seed=args.seed, samples=args.samples)
 
     (calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
-     info, routes, branching) = run(
+     info, routes, branching, provenance) = run(
         case, args.cross_sections, args.chain, uncertainty)
     ratio, metrics = summarise(case, calculated)
     plot(case, calculated, breakdown, ratio, metrics, args.output, sigma)
@@ -684,6 +741,10 @@ def main():
         # separately and hopes is the same one.
         "production_routes": routes,
         "isomeric_branching": branching,
+        # Which library each part of the network came from. Filed with the
+        # result rather than worked out later from the paths, because the paths
+        # can be repointed and this run cannot be run again from its own JSON.
+        "nuclear_data": provenance,
     }, indent=2))
 
 
