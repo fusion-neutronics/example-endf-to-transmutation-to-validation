@@ -175,8 +175,12 @@ XLABEL_CLEAR = 0.042
 # left as margin instead.
 PANEL_MIN_HEIGHT = 0.17
 
-# The rule under the running header.
-RULE = "#e8a33d"
+# The rule under the running header, in the two colours of the YANI logo: blue
+# for the first half of its length, orange for the second. Drawn as two segments
+# meeting at the midpoint rather than as a gradient, which a vector rule cannot
+# carry without rasterising the whole strip.
+RULE_BLUE = "#16547f"
+RULE_ORANGE = "#ee761b"
 
 # Monospace so the tables column up without measuring glyphs.
 MONO = {"family": "monospace", "fontsize": 7.4}
@@ -722,8 +726,13 @@ def page(pdf, title, subtitle, number, total):
     figure.text(0.94, 0.962, title, ha="right", va="bottom", fontsize=9)
     figure.text(0.94, 0.944, subtitle, ha="right", va="bottom", fontsize=8,
                 style="italic")
-    figure.add_artist(plt.Line2D([0.30, 0.94], [0.938, 0.938], color=RULE,
-                                 linewidth=1.1, transform=figure.transFigure))
+    left, right = 0.30, 0.94
+    middle = (left + right) / 2
+    for start, end, colour in [(left, middle, RULE_BLUE),
+                               (middle, right, RULE_ORANGE)]:
+        figure.add_artist(plt.Line2D([start, end], [0.938, 0.938], color=colour,
+                                     linewidth=1.1, transform=figure.transFigure,
+                                     solid_capstyle="butt"))
     figure.text(0.5, 0.028, f"Page {number} of {total}", ha="center", fontsize=8)
     return figure
 
