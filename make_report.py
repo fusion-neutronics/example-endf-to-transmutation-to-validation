@@ -19,10 +19,14 @@ decay-heat validation report conventionally uses:
     production pathways      the reaction and decay steps that make each
                              product, over as many pages as they need
     figure page              heat curves and % contributions, one row per library
+    nuclear data used        which library each part of the network came from,
+                             one column per library, read from each run's own
+                             record of what it loaded
 
-The last three repeat per campaign; the comparison page carries all of them at
-once, so the campaigns can be read against each other. One foil is one
-document, and that is the point of binding it this way. A foil
+The C/E table, the pathways and the figure page repeat per campaign. The
+comparison page carries all of the campaigns at once, so they can be read
+against each other, and the nuclear data page is one per document and comes
+last. One foil is one document, and that is the point of binding it this way. A foil
 measured more than once is still one subject, and the spread between its
 campaigns is a result about the data rather than about any one measurement:
 iron reads 6% high against ``2000exp_5min`` and 7% low against
@@ -1641,6 +1645,100 @@ def figure_page(pdf, case, results, title, subtitle, number, total):
     plt.close(figure)
 
 
+# What a cell says when the run turned that subsection off outright.
+OFF_LABEL = "not used"
+
+# What the provenance page lists, in the order a reader meets it: the neutron
+# side first, because that is what `--library` moves, then the decay side, which
+# never moves. The MF numbers are on the page because they are what makes the
+# claim checkable against the evaluation itself.
+PROVENANCE_PARTS = [
+    ("cross_sections", "Cross sections and covariance (MF=3, MF=33)"),
+    ("reactions", "Reaction topology"),
+    ("branching", "Isomeric branching (MF=9, MF=10)"),
+    ("decay_data", "Decay data (half-lives, modes, energies)"),
+    ("fission_yields", "Fission yields"),
+]
+
+
+def provenance_rows(groups, libraries, decay_used):
+    """One row per part of the network, one cell per library.
+
+    Read out of each result's own record of what it loaded. A run that filed no
+    record contributes no name; a cell nobody named is left empty, and every
+    library with at least one such run is listed under the table. The
+    alternative is reading the library off the folder name, and the folder name
+    is exactly the thing that can be wrong.
+
+    A cell carries more than one name when the runs behind that column disagree,
+    which a single foil cannot do but a volume can: two foils converted at
+    different times can sit under one library column. Joined rather than reduced
+    to the first, since a column that quietly showed one of two answers would be
+    the failure this page exists to prevent.
+    """
+    rows, missing = [], set()
+    for key, label in PROVENANCE_PARTS:
+        row = [label]
+        for library in libraries:
+            named = set()
+            for sections in groups:
+                for _experiment, results in sections:
+                    for name, result in results:
+                        if name != library:
+                            continue
+                        record = (result.get("nuclear_data") or {}).get(key)
+                        # A subsection turned off is a third answer, and not the
+                        # same as one nobody recorded: it says the run decided it
+                        # was not needed, which is a claim the page should carry.
+                        if record and record.get("off"):
+                            named.add(OFF_LABEL)
+                        elif record and record.get("library"):
+                            named.add(library_label(record["library"]))
+                        else:
+                            missing.add(library)
+            row.append(" / ".join(sorted(named)))
+        rows.append(row)
+
+    # Not one of the run's settings: the T1/2 column is filled at report time
+    # from the decay sublibrary, so it is ruled off from the rows above it.
+    rows.append(["Half-lives on these pages",
+                 *[library_label(decay_used) if decay_used else "" for _ in libraries]])
+
+    return rows, sorted(missing)
+
+
+def provenance_note(missing, decay_used):
+    """One line on why the decay rows do not follow the column heading."""
+    decayed = library_label(decay_used) if decay_used else "a decay sublibrary"
+    text = textwrap.wrap(
+        "Decay data is not something a neutron evaluation carries, so the "
+        f"simulations take it from {decayed} in every column to make a complete "
+        "set of nuclear data inputs.", 104)
+    if missing:
+        text += textwrap.wrap(
+            "Not every run behind these columns recorded what it loaded: "
+            + ", ".join(library_label(name) for name in missing)
+            + ". A cell nobody named is left empty rather than filled in from "
+            "the folder it was read from. Re-run step 2 to fill them.", 104)
+    return "\n".join(text)
+
+
+def provenance_page(pdf, heading, groups, libraries, decay_used,
+                    title, subtitle, number, total):
+    """The last page: which library each part of the network actually came from."""
+    figure = page(pdf, title, subtitle, number, total)
+    figure.text(0.08, 0.905, heading, fontsize=11)
+    rows, missing = provenance_rows(groups, libraries, decay_used)
+    columns = [("Part of the network", "", "l", 2.7)] + [
+        (library_label(library), "", "l", 1.0) for library in libraries]
+    bottom = table(figure, columns, rows, PATHWAY_TOP,
+                   rules_after={len(rows) - 2})
+    figure.text(0.08, bottom - 0.024, provenance_note(missing, decay_used),
+                va="top", fontsize=7.6, color="#555555")
+    pdf.savefig(figure)
+    plt.close(figure)
+
+
 def pathway_data(primary, half_lives):
     """The pathway analysis as data: every product, every route, every share.
 
@@ -1697,6 +1795,10 @@ def write_data(out, case, sections, half_lives):
                 "mean_percent_diff": score(result)["mean_percent_diff"],
                 "mean_chi2": score(result)["mean_chi2"],
                 "data_uncertainty_info": result.get("data_uncertainty_info"),
+                # The last page's table, per library per campaign and unaggregated,
+                # so a reader who wants to know what a number was computed from
+                # does not have to read it off a PDF.
+                "nuclear_data": result.get("nuclear_data"),
             } for library, result in results],
             "nuclide_analysis": nuclide_analysis(primary, half_lives),
             "pathways": pathway_data(primary, half_lives),
@@ -1802,20 +1904,24 @@ def build(case, experiments, libraries, results_root, chain, decay, out,
     in one document: the spread between its experiments is a result, and the
     published report binds them the same way.
     """
-    half_lives, composed = half_lives_from(decay, chain)
+    half_lives, composed, decay_used = half_lives_from(decay, chain)
     sections, layouts, pages = prepare(case, experiments, libraries,
                                        results_root, half_lives)
     filed = sections[0][1][0][1].get("production_routes") or {}
     print(f"pathways: {sum(len(v) for v in filed.values())} routes into "
           f"{len(filed)} products")
-    total = 1 + pages
+    # The cover, the foil's pages, and the nuclear data they were all made from.
+    total = 2 + pages
     colours = library_colours(libraries)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(out) as pdf:
         cover_page(pdf, case, sections, title, subtitle, 1, total)
-        draw_case(pdf, case, sections, layouts, colours, half_lives,
-                  title, subtitle, 2, total)
+        number = draw_case(pdf, case, sections, layouts, colours, half_lives,
+                           title, subtitle, 2, total)
+        provenance_page(pdf, f"{element_name(case)}, nuclear data used",
+                        [sections], libraries, decay_used,
+                        title, subtitle, number, total)
         pdf.infodict()["Title"] = f"{title}: {element_name(case)}"
         pdf.infodict()["Subject"] = subtitle
 
@@ -1840,7 +1946,7 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
     on a sweep of 73 there will usually be a few, and losing the other 70 to one
     of them would be absurd.
     """
-    half_lives, composed = half_lives_from(decay, chain)
+    half_lives, composed, decay_used = half_lives_from(decay, chain)
 
     prepared, skipped = [], []
     for case in cases:
@@ -1877,6 +1983,9 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
                 prepared, key=lambda item: order.get(item[0], 0)):
             number = draw_case(pdf, case, sections, layouts, colours, half_lives,
                                title, subtitle, number, total)
+        provenance_page(pdf, f"{len(prepared)} foils, nuclear data used",
+                        [sections for _c, sections, _l, _p in prepared],
+                        libraries, decay_used, title, subtitle, number, total)
         pdf.infodict()["Title"] = f"{title}: {len(prepared)} foils"
         pdf.infodict()["Subject"] = subtitle
 
