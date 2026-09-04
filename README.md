@@ -8,10 +8,10 @@ The whole chain is three steps.
 1. **ENDF in.** Evaluations for the natural isotopes of whatever the foil is
    made of. TENDL-2025 by default, any library you point it at otherwise.
 2. **Arrow out.** NJOY reconstructs the resonances and Doppler broadens to
-   294 K, and `nuclear_data_to_arrow` writes the result as Arrow, which is the
-   form yani reads. This happens on your machine; nothing pre-processed is
-   downloaded.
-3. **Validation.** yani irradiates a 1 g foil with the measured neutron
+   294 K, and `convert_to_arrow.py` calls YANI's `convert_neutron_xs` to write
+   the result as Arrow, which is the form YANI reads. This happens on your
+   machine; nothing pre-processed is downloaded.
+3. **Validation.** YANI irradiates a 1 g foil with the measured neutron
    spectrum from the JAEA FNS decay-heat experiment, follows the activation
    products through the cooling schedule, and the specific decay heat is
    plotted against the measurement, with an uncertainty band on each: the
@@ -221,27 +221,53 @@ Binds the per-foil JSON into `results/report_<case>.pdf`: the foil named; then
 every library's total against the measurement, one panel per campaign; then the
 C/E table with an E/C column per library and, under it, the nuclide E/C analysis
 and that library's heat curve; then the production pathways, over as many pages
-as they need; then the heat curves with their percentage contributions. Nothing
+as they need; then the heat curves with their percentage contributions; and
+last, one page naming which library each part of the network came from. Nothing
 is recomputed: step 2 already wrote the full per-nuclide breakdown and the sigma
 on it, so a report is cheap to regenerate and cannot disagree with the run it
 came from.
 
-**One document per foil, covering every campaign it was measured in.** The last
-three pages repeat per campaign. A foil measured more than once is still one
+**One document per foil, covering every campaign it was measured in.** The C/E
+table, the pathways and the figures repeat per campaign; the comparison page and
+the nuclear data page are one per document. A foil measured more than once is still one
 subject, and the spread between its campaigns is a result about the data rather
 than about any one measurement, so binding them separately hides it. Tungsten's
 three campaigns run 122%, 65% and 20% out, all against the same cross sections;
 iron reads 6% high on `2000exp_5min` and 7% low on `1996exp_5min`.
 
 With no arguments it writes one for every foil that has a result. Which foils,
-which campaigns, which libraries and which chain are all read off what is on
-disk. `--case` picks foils, `--experiments` picks campaigns, and naming exactly
-one campaign puts it back in the filename as `report_<case>_<experiment>.pdf`.
+which campaigns and which libraries are all read off what is on disk. `--case`
+picks foils, `--experiments` picks campaigns, and naming exactly one campaign
+puts it back in the filename as `report_<case>_<experiment>.pdf`.
 
 The calculation's own uncertainty is on the page beside its value, `+/- 6%` and
 `%ΔCnuc` both. A result filed before those existed is still readable: the
 two uncertainty columns are left empty rather than filled with a zero, which
 would be a different claim.
+
+### Which library a number actually came from
+
+The last page of every report is a table of it: cross sections and MF=33
+covariance, reaction topology, isomeric branching, decay data, fission yields
+and the half-lives on the pages, one column per library. "Which library supplies
+what" below says why the split falls where it does. This is the page that states
+it per run.
+
+A column is one library only where its neutron data and the decay data are the
+same release, which on a four-library report is ENDF/B-VIII.1's column alone.
+Everywhere else the neutron side moves with the library at the head of the
+column and the decay side stays on `endf-b8.1`, which for TENDL is forced and
+for JEFF and JENDL is a choice. It is what makes the columns comparable: a
+difference between two of them is a difference on the neutron side.
+
+Most cells are the name the data on disk stamps itself with, filed by the run
+that read it rather than taken from the folder it sat in. Two are not. Fission
+yields read "not used", because the run turns that subsection off rather than
+naming a library nothing draws on, and the half-lives row is filled at report
+time from `--decay`. A result filed before step 2 recorded any of this leaves
+its cells empty and is named under the table, instead of having its folder name
+guessed into it. The same record is in `report_<case>.json`, per library per
+campaign.
 
 `--libraries` is also how to say which library is the primary one, whose
 absolute values the table carries:
@@ -647,7 +673,10 @@ states and the second is what no neutron evaluation can, so this is the most of
 a library swap that TENDL is able to express.
 
 Fission yields are the one thing TENDL does publish that is not used here: none
-of the 73 FNS foils is fissionable, so the subsection is never built.
+of the 73 FNS foils is fissionable, so the subsection is never built and step 2
+turns it off rather than naming a library for it. Off is not the same as unset:
+a fission rate that did need yields is refused, naming the nuclide, instead of
+burning the nuclide while losing its fission products.
 
 ### So what is a C/E here a statement about
 
