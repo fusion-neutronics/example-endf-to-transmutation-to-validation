@@ -343,21 +343,6 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
         return {}, None, None
 
 
-def edge_weights(result):
-    """``(parent, kind, target) -> production per parent atom`` for one result.
-
-    Written by run_transmutation.py from ``get_reaction_rates``, which arrived
-    with yani-core 0.9.0. Absent from results filed before that, and absent for
-    a decay-only run, in which case the isomeric branching block has nothing to
-    rank.
-    """
-    out = {}
-    for row in result.get("edge_rates") or []:
-        parent, kind, target, weight = row
-        out[(parent, kind, target)] = weight
-    return out
-
-
 def format_half_life(seconds):
     """A half-life the way the decay tables print it."""
     if seconds is None:
@@ -1197,22 +1182,22 @@ def isomeric_splits(primary):
     channel carries a placeholder there which the energy-dependent overlay
     replaces at solve time. Step 2 files what the solve used, so this reads it.
 
-    Ranked by production rather than by rate. An edge weight is per atom of its
-    parent, so a channel off a 0.12% isotope outranks one off a 28% isotope on
-    rate alone, and W180(n,2n) would sit above W186(n,2n) on a tungsten foil.
-    Multiplying by the parent's atoms is what makes the order mean anything.
+    Ranked by production rather than by rate, which yani does now (yani-core
+    0.15.0) and this used to do here: multiply each channel's per-atom rate by
+    its parent's density and re-sort. An edge weight is per atom of its parent,
+    so a channel off a 0.12% isotope outranks one off a 28% isotope on rate
+    alone, and W180(n,2n) would sit above W186(n,2n) on a tungsten foil.
     """
-    branching = primary.get("isomeric_branching") or {}
-    weights = edge_weights(primary)
-    densities = primary.get("initial_atoms_per_barn_cm") or {}
-    splits = []
-    for parent, kinds in branching.items():
-        for kind, split in kinds.items():
-            produced = densities.get(parent, 0.0) * sum(
-                weight for (a_parent, a_kind, _t), weight in weights.items()
-                if (a_parent, a_kind) == (parent, kind))
-            splits.append((produced, parent, kind, split))
-    return sorted(splits, reverse=True, key=lambda row: row[0])
+    branching = primary.get("isomeric_branching") or []
+    if isinstance(branching, dict):
+        raise SystemExit(
+            "this result's isomeric_branching is a dict keyed by parent, the "
+            "shape yani returned before yani-core 0.15.0. It is a list of "
+            "channels ordered by production now, so re-run step 2 to refile "
+            "the result."
+        )
+    return [(channel["production"], channel["parent"], channel["reaction"],
+             channel["split"]) for channel in branching]
 
 
 def isomeric_split_rows(primary):
@@ -1868,8 +1853,9 @@ def write_data(out, case, sections, half_lives):
             "nuclide_analysis": nuclide_analysis(primary, half_lives),
             "pathways": pathway_data(primary, half_lives),
             "isomeric_branching": [
-                {"parent": parent, "reaction": kind, "final_states": split}
-                for _produced, parent, kind, split in isomeric_splits(primary)],
+                {"parent": parent, "reaction": kind, "production": produced,
+                 "final_states": split}
+                for produced, parent, kind, split in isomeric_splits(primary)],
         })
 
     data_path = out.with_suffix(".json")

@@ -57,17 +57,24 @@ njoy2016
 #     `rate_fraction_covered` and the edge rates, joined on a string key, and
 #     weighted by rate but not by the density of the parent each rate belongs
 #     to, which is a factor of three wrong on iron.
+#   * `get_isomeric_branching` returning a list of channels ordered by
+#     production (0.15.0), which make_report.py's branching block reads
+#     straight through. Against 0.13.0 it is a dict keyed by parent, which the
+#     block now refuses rather than mis-reads, and the ordering was done here
+#     too: an edge rate is per atom of its parent, so on rate alone
+#     `W180(n,2n)` outranks `W186(n,2n)` on a tungsten foil and W180 is 0.12%
+#     of it.
 #   * A chain built for a different foil is refused by `transmute` (0.13.0)
 #     rather than solving to an inventory of nothing. run_transmutation.py used
 #     to write a `scope.json` sidecar beside each chain and check it itself.
 #
-# 0.13.0 for both names: `yani` 0.13.0 pins `yani-core==0.13.0`, so the wrapper
+# 0.15.0 for both names: `yani` 0.15.0 pins `yani-core==0.15.0`, so the wrapper
 # and the compiled wheel move together and a floor on the one is a floor on the
 # other.
 #
 # A floor turns each of those into an unsatisfiable requirement pip reports up
 # front, rather than an AttributeError partway through a run.
-yani>=0.13.0
+yani>=0.15.0
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no

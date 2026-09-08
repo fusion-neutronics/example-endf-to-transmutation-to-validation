@@ -453,6 +453,11 @@ def run(case, cross_sections, chain, uncertainty=None):
     # of walking and one chance for the two chains to differ; yani 0.13.0
     # answers from the solve itself.
     #
+    # The branching is a list of channels ordered by what each one made, its
+    # rate times the parent's atom density (yani-core 0.15.0), rather than a
+    # dict keyed by parent. Step 5 used to do that weighting and sorting itself,
+    # since ordering on rate alone puts a channel off a trace isotope on top.
+    #
     # Routes are asked for over the first irradiation pulse. Every pulse in
     # these schedules shares one spectrum, so the shares are the same for each,
     # and a cooldown drives no reactions at all.
@@ -473,7 +478,7 @@ def run(case, cross_sections, chain, uncertainty=None):
         for nuclide, share in sorted(peak.items())
         if share >= ROUTE_PRODUCT_FLOOR
     }
-    branching = results.get_isomeric_branching(material_id, 0) or {}
+    branching = results.get_isomeric_branching(material_id, 0) or []
 
     return (heat, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
             info, routes, branching, provenance)
