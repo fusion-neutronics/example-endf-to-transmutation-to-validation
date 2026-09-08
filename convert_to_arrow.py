@@ -349,6 +349,25 @@ def build_branching(sources, decay_dir, out_root, library):
     )
     interesting = {k: v for k, v in stats.items() if isinstance(v, int) and v}
     print(f"        {interesting} -> {out_root}")
+    # What the converter made of the library it just read. A level matched to an
+    # isomer by its index rather than its energy is right only while two level
+    # schemes agree, and partials that do not add up to MF=3 are a defect in the
+    # evaluation rather than in the conversion. Both belong in the log of a run
+    # whose whole point is showing where the numbers came from.
+    routes = stats.get("level_routes") or {}
+    if routes:
+        print("        level -> isomer: "
+              + ", ".join(f"{name} {count}" for name, count in sorted(routes.items())))
+    for label, key in (("levels worth a look", "flagged_levels"),
+                       ("partials that miss MF=3", "partial_sum_mismatches")):
+        lines = stats.get(key) or []
+        if not lines:
+            continue
+        print(f"        {label}: {len(lines)}")
+        for line in lines[:3]:
+            print(f"          {line}")
+        if len(lines) > 3:
+            print(f"          ... and {len(lines) - 3} more")
     return out_root
 
 
