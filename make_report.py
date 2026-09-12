@@ -343,6 +343,71 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
         return {}, None, None
 
 
+# What each kind of flagged decay record means, in the words the page uses. The
+# converter names the kind; this says what a reader should take from it, which
+# is the part that decides whether a number is worth believing.
+INCONSISTENCY_KINDS = {
+    "zero_half_life": "flagged unstable with a half-life of zero",
+    "branching_ratio_sum": "decay branching ratios that do not sum to one",
+    "isomeric_transition_energy": "an isomeric transition whose light and "
+                                  "electromagnetic averages do not add up to its Q",
+}
+
+
+def decay_records(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
+    """What the decay sublibrary says about its own records.
+
+    The published libraries are dated builds, and the decay subsection's
+    ``provenance.json`` carries the build's ``data_version`` plus two records
+    the converter fills while reading ENDF. ``decay_energy_placeholders`` names
+    every nuclide whose average decay energies are the Q/3 stand-in rather than
+    an evaluated decay scheme. ``decay_inconsistencies`` lists, per kind, the
+    records that cannot all be true.
+
+    Both bear on this report more than they would on a transport run. Decay
+    heat is a sum over products of N x lambda x Q, and this sublibrary is where
+    lambda and Q come from, so a product on the placeholder list is carrying a
+    stand-in into the calculated column and a product on the flagged list is
+    carrying a number its own evaluation contradicts. Neither is visible from
+    the answer, and a page that names the library without naming these says
+    less than it appears to.
+
+    Read from the same file the half-lives came from, so the page cannot
+    describe one build while quoting another. Like the T1/2 column this is
+    filled at report time rather than being one of the run's settings.
+
+    Returns the build stamp, the set of placeholder nuclides and a mapping of
+    nuclide to the kind of record flagged against it. All three come back empty
+    when there is nothing to read: data published before the records existed
+    carries neither, which is a reason to say less, not to fail.
+    """
+    if chain is not None and (chain / "decay").is_dir():
+        source = chain / "decay" / "provenance.json"
+    else:
+        source = cache / f"{decay}-transmutation-decay.arrow" / "provenance.json"
+    try:
+        record = json.loads(source.read_text())
+    except Exception as error:  # noqa: BLE001 - the page is better than no page
+        print(f"decay records: unreadable ({error}). The nuclear data page "
+              f"says only which library was used.")
+        return None, set(), {}
+
+    placeholders = set((record.get("decay_energy_placeholders") or {}).get("nuclides") or [])
+    flagged = {}
+    for kind, entries in (record.get("decay_inconsistencies") or {}).items():
+        if kind not in INCONSISTENCY_KINDS:
+            continue
+        for entry in entries or []:
+            name = entry.get("nuclide") if isinstance(entry, dict) else entry
+            if name:
+                flagged.setdefault(name, kind)
+
+    build = record.get("data_version") or None
+    print(f"decay records: {build or 'no build stamp'}, {len(placeholders)} "
+          f"placeholder energies, {len(flagged)} flagged records")
+    return build, placeholders, flagged
+
+
 def format_half_life(seconds):
     """A half-life the way the decay tables print it."""
     if seconds is None:
@@ -1757,13 +1822,65 @@ def provenance_rows(groups, libraries, decay_used):
     return rows, sorted(missing)
 
 
-def provenance_note(missing, decay_used):
-    """One line on why the decay rows do not follow the column heading."""
+def carried_products(groups):
+    """Every product these results put at least ``SHARE_FLOOR`` of the heat through.
+
+    The same set the figures and the nuclide analysis are drawn from, so a
+    caveat about the decay data lands on the products a reader has already been
+    shown rather than on the whole sublibrary.
+    """
+    products = set()
+    for sections in groups:
+        for _experiment, results in sections:
+            for _name, result in results:
+                products.update(name for name, _share, _index in leading_products(result))
+    return products
+
+
+def provenance_note(missing, decay_used, records=(None, set(), {}), products=()):
+    """Why the decay rows do not follow the column heading, and what that data says.
+
+    The decay side is one library in every column, which the first paragraph
+    explains. The rest is what that library's own build records say about the
+    products on these pages: which of them carry the Q/3 placeholder rather
+    than an evaluated decay scheme, and which carry a record the converter
+    flagged as self-contradictory. Both are only worth printing for a product
+    that is actually carrying heat here, so both are intersected with the ones
+    the figures show.
+    """
     decayed = library_label(decay_used) if decay_used else "a decay sublibrary"
+    build, placeholders, flagged = records
+    carried = set(products)
     text = textwrap.wrap(
         "Decay data is not something a neutron evaluation carries, so the "
         f"simulations take it from {decayed} in every column to make a complete "
         "set of nuclear data inputs.", 104)
+
+    if build:
+        text += textwrap.wrap(
+            f"That sublibrary is the {build} build, which is the stamp it carries "
+            "and what the YANI wheel checks a download against. A rebuild can move "
+            "a decay energy, so the build is part of the answer and not just part "
+            "of the provenance. Like the T1/2 column above, it is read here at "
+            "report time from the copy on this machine.", 104)
+
+    named = sorted(carried & placeholders)
+    if named:
+        text += textwrap.wrap(
+            f"Carrying placeholder decay energies in that build: {', '.join(named)}. "
+            "Their average decay energies are the Q/3 stand-in rather than an "
+            "evaluated decay scheme, so the heat attributed to them is a placeholder "
+            "as much as a calculation, and a deviation on a cooling point they "
+            "dominate says nothing about the neutron library under test.", 104)
+
+    flags = sorted((name, kind) for name, kind in flagged.items() if name in carried)
+    if flags:
+        text += textwrap.wrap(
+            "Decay records the converter flagged as unable to all be true: "
+            + "; ".join(f"{name}, {INCONSISTENCY_KINDS[kind]}" for name, kind in flags)
+            + ". Nothing is corrected, here or in YANI; the number is used as the "
+            "evaluation gives it and named so it can be looked up.", 104)
+
     if missing:
         text += textwrap.wrap(
             "Not every run behind these columns recorded what it loaded: "
@@ -1773,7 +1890,7 @@ def provenance_note(missing, decay_used):
     return "\n".join(text)
 
 
-def provenance_page(pdf, heading, groups, libraries, decay_used,
+def provenance_page(pdf, heading, groups, libraries, decay_used, records,
                     title, subtitle, number, total):
     """The last page: which library each part of the network actually came from."""
     figure = page(pdf, title, subtitle, number, total)
@@ -1783,7 +1900,8 @@ def provenance_page(pdf, heading, groups, libraries, decay_used,
         (library_label(library), "", "l", 1.0) for library in libraries]
     bottom = table(figure, columns, rows, PATHWAY_TOP,
                    rules_after={len(rows) - 2})
-    figure.text(0.08, bottom - 0.024, provenance_note(missing, decay_used),
+    figure.text(0.08, bottom - 0.024,
+                provenance_note(missing, decay_used, records, carried_products(groups)),
                 va="top", fontsize=7.6, color="#555555")
     pdf.savefig(figure)
     plt.close(figure)
@@ -1956,6 +2074,7 @@ def build(case, experiments, libraries, results_root, chain, decay, out,
     published report binds them the same way.
     """
     half_lives, composed, decay_used = half_lives_from(decay, chain)
+    records = decay_records(decay, chain)
     sections, layouts, pages = prepare(case, experiments, libraries,
                                        results_root, half_lives)
     filed = sections[0][1][0][1].get("production_routes") or {}
@@ -1971,7 +2090,7 @@ def build(case, experiments, libraries, results_root, chain, decay, out,
         number = draw_case(pdf, case, sections, layouts, colours, half_lives,
                            title, subtitle, 2, total)
         provenance_page(pdf, f"{element_name(case)}, nuclear data used",
-                        [sections], libraries, decay_used,
+                        [sections], libraries, decay_used, records,
                         title, subtitle, number, total)
         pdf.infodict()["Title"] = f"{title}: {element_name(case)}"
         pdf.infodict()["Subject"] = subtitle
@@ -1998,6 +2117,7 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
     of them would be absurd.
     """
     half_lives, composed, decay_used = half_lives_from(decay, chain)
+    records = decay_records(decay, chain)
 
     prepared, skipped = [], []
     for case in cases:
@@ -2036,7 +2156,8 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
                                title, subtitle, number, total)
         provenance_page(pdf, f"{len(prepared)} foils, nuclear data used",
                         [sections for _c, sections, _l, _p in prepared],
-                        libraries, decay_used, title, subtitle, number, total)
+                        libraries, decay_used, records,
+                        title, subtitle, number, total)
         pdf.infodict()["Title"] = f"{title}: {len(prepared)} foils"
         pdf.infodict()["Subject"] = subtitle
 
