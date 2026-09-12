@@ -50,6 +50,12 @@ is not on PyPI, so `requirements.txt` adds a wheel index for it. The `yani`
 wheel both reads the nuclear data and makes it: the ENDF conversion, the reaction topology and the isomeric
 branching are all functions on the wheel.
 
+The floor on that wheel is 0.16.0, and it is a floor on the published data as
+much as on the API: each wheel pins the build of the nuclear data it expects, so
+one older than the 2026-09-08 republish refuses the decay sublibrary step 2
+downloads. [The decay data is a dated build](#the-decay-data-is-a-dated-build-and-the-wheel-pins-which-one)
+says what that is about.
+
 The wheels are abi3 from Python 3.10 up, one per platform rather than one per
 Python version, published for Linux x86_64, Windows x64 and macOS arm64. There
 is no Rust toolchain to install and nothing is compiled here.
@@ -230,10 +236,12 @@ every library's total against the measurement, one panel per campaign; then the
 C/E table with an E/C column per library and, under it, the nuclide E/C analysis
 and that library's heat curve; then the production pathways, over as many pages
 as they need; then the heat curves with their percentage contributions; and
-last, one page naming which library each part of the network came from. Nothing
-is recomputed: step 2 already wrote the full per-nuclide breakdown and the sigma
-on it, so a report is cheap to regenerate and cannot disagree with the run it
-came from.
+last, one page naming which library each part of the network came from, which
+build of the decay data supplied the half-lives and decay energies, and which of
+this foil's products that build flags as a placeholder or as self-contradictory.
+Nothing is recomputed: step 2 already wrote the full per-nuclide breakdown and
+the sigma on it, so a report is cheap to regenerate and cannot disagree with the
+run it came from.
 
 **One document per foil, covering every campaign it was measured in.** The C/E
 table, the pathways and the figures repeat per campaign; the comparison page and
@@ -684,6 +692,38 @@ of the 73 FNS foils is fissionable, so the subsection is never built and step 2
 turns it off rather than naming a library for it. Off is not the same as unset:
 a fission rate that did need yields is refused, naming the nuclide, instead of
 burning the nuclide while losing its fission products.
+
+### The decay data is a dated build, and the wheel pins which one
+
+What YANI downloads is not "endf-b8.1" in the abstract but one build of it,
+stamped with a `data_version`. Every wheel pins the build it expects and refuses
+a download reporting another one, so the wheel and the data move together: a
+wheel older than the last republish cannot read the current data at all, and
+fails saying so in the first seconds of a run rather than serving something
+stale. All six published libraries were republished on 2026-09-08, which is why
+`requirements.txt` floors YANI at 0.16.0. Nothing below that can fetch the decay
+sublibrary this example runs on.
+
+That build also says what it knows it cannot vouch for, in the decay
+subsection's `provenance.json`, and step 3 puts both records on the nuclear data
+page for the products a foil's heat actually runs through:
+
+* **Placeholder decay energies.** 1144 nuclides carry the Q/3 stand-in rather
+  than an evaluated decay scheme. Decay heat is a sum over products of
+  N x lambda x Q, so a product on that list is contributing a placeholder to the
+  calculated column, and a deviation at a cooling point it dominates says
+  nothing about the neutron library under test.
+* **Records that cannot all be true.** 38 of them: a half-life of zero on a
+  nuclide flagged unstable, branching ratios that do not sum to one, and an
+  isomeric transition whose light and electromagnetic averages do not add up to
+  its Q. That last kind matters most here, because an isomeric transition emits
+  no neutrino and so must pay out its whole Q. The hafnium foil meets one:
+  ENDF/B-VIII.1 books Hf177m1 at 1.52 MeV against a 1.32 MeV transition, and
+  Hf177m1 peaks at 6.0% of that foil's calculated heat.
+
+Neither is corrected, here or in YANI. The number is used as the evaluation
+gives it and named on the page so it can be looked up, which is the only thing
+a code can honestly do with a record it did not make.
 
 ### So what is a C/E here a statement about
 
