@@ -148,12 +148,10 @@ def decay_heat_spread(results, material_id, case, steps, keys):
 
     yani does that itself. ``get_decay_heat_uncertainty`` evaluates the heat once
     per replica and hands back the ensemble's sample standard deviation beside
-    the unperturbed value, which is the same statistic this used to build by
-    rebuilding a Material per replica out of ``get_uncertainty_inventories`` and
-    taking ``np.std(..., ddof=1)`` over the totals. Both divide by N - 1, because
-    the quantity wanted is how far the answer moves when the cross sections move
-    within their covariance, which is the width of the ensemble rather than the
-    error on where its centre sits.
+    the unperturbed value. It divides by N - 1, because the quantity wanted is
+    how far the answer moves when the cross sections move within their
+    covariance, which is the width of the ensemble rather than the error on
+    where its centre sits.
 
     The getter works in watts and needs the material's volume, so everything is
     scaled here to the uW/g the measurement is published in.
@@ -167,8 +165,8 @@ def decay_heat_spread(results, material_id, case, steps, keys):
     # ``None`` for a solve run without ``data_uncertainty``, and a ``std_dev``
     # of ``None`` for one whose ensemble came back under two replicas, which is
     # what happens when nothing in the material had covariance to resample from:
-    # cross sections converted with --no-covariance, or by a converter old
-    # enough not to have written one, carry no covariance.arrow. A spread over
+    # cross sections converted with --no-covariance carry no covariance.arrow,
+    # and so does an evaluation that states no MF=33. A spread over
     # nothing is not zero and is not a number, and taking it anyway put a bare
     # NaN in the JSON, which is not valid JSON at all. Treat it as the absence
     # it is; `report_uncertainty` says so and names the fix.
@@ -236,8 +234,8 @@ def report_uncertainty(info, relative):
     # library can state covariance for every isotope in the foil and still say
     # nothing about the one channel carrying the heat, and then the count reads
     # as coverage the sigma does not have. yani weights it by rate and by the
-    # parent's own density, which this used to do by hand and got wrong: an edge
-    # rate is per atom of its parent and production is not.
+    # parent's own density, since an edge rate is per atom of its parent and
+    # production is not.
     fraction = info.get("rate_fraction_covered_total")
     if fraction is not None:
         lines.append(f"covering {fraction * 100:.1f}% of the production rate "
@@ -351,12 +349,10 @@ def run(case, cross_sections, chain, uncertainty=None):
         "fission_yields": {"library": None, "path": None, "off": True},
     }
 
-    # A chain left over from a different foil carries no reactions for these
-    # nuclides and used to solve to an inventory of nothing, which surfaced only
-    # as zero decay heat at the end of a full run. yani 0.13.0 refuses it before
-    # the solve and names both the material and what the chain covers, so the
-    # sidecar this file used to write and check is gone.
-
+    # A chain built for a different foil carries no reactions for these
+    # nuclides. yani refuses it before the solve and names both the material
+    # and what the chain covers, so nothing here checks that.
+    #
     # `transmute` hands back a TransmutationResults keyed by material id, not a
     # plain list. Its index 0 is the initial composition, so `step_materials` is
     # the per-step view the slice below counts from. The foil is built without an
@@ -394,10 +390,9 @@ def run(case, cross_sections, chain, uncertainty=None):
         if ensemble is not None:
             sigma, by_nuclide_sigma = ensemble
 
-    # The rate of every production edge the solve drove, which yani-core 0.9.0
-    # hands back and earlier versions computed and threw away. Summed over the
-    # irradiation pulses and
-    # weighted by their duration, so an edge carries the production it drove per
+    # The rate of every production edge the solve drove, summed over the
+    # irradiation pulses and weighted by their duration, so an edge carries the
+    # production it drove per
     # atom of its parent over the whole irradiation, which is what weights a
     # route. Cooldown steps drive no reactions and contribute nothing.
     #
@@ -427,15 +422,15 @@ def run(case, cross_sections, chain, uncertainty=None):
     initial_atoms = dict(initial.nuclides) if initial is not None else {}
 
     # An irradiated foil always activates, so heat that is identically zero
-    # means the network produced nothing at all. It used to be reported as
-    # C/E 0.000, which reads like a physics result rather than the wiring
-    # mistake it invariably is, and a sweep would log it foil after foil
-    # without ever failing. It is an error here instead.
+    # means the network produced nothing at all. Reported as C/E 0.000 it would
+    # read like a physics result rather than the wiring mistake it invariably
+    # is, and a sweep would log it foil after foil without ever failing, so it
+    # is an error here.
     #
     # The chain is the usual suspect: it is rebuilt per foil and scoped to that
     # foil's isotopes, so one built for a different foil leaves these nuclides
-    # with no reactions. A chain from an older converter, or cross sections that
-    # do not cover the material, will do it too.
+    # with no reactions. Cross sections that do not cover the material will do
+    # it too.
     if not heat.any():
         raise SystemExit(
             f"{case.name}: every cooling step came out at zero decay heat, so the "
@@ -448,15 +443,12 @@ def run(case, cross_sections, chain, uncertainty=None):
         )
     # The production routes into each product that carries heat, and the
     # flux-weighted isomeric branching, both derived by yani from the chain and
-    # the rates the solve actually ran with. They were rebuilt in step 5 from
-    # `edge_rates` plus a second load of the chain, which is a few hundred lines
-    # of walking and one chance for the two chains to differ; yani 0.13.0
-    # answers from the solve itself.
+    # the rates the solve actually ran with, so the report never loads a chain
+    # of its own and cannot walk a different one.
     #
     # The branching is a list of channels ordered by what each one made, its
-    # rate times the parent's atom density (yani-core 0.15.0), rather than a
-    # dict keyed by parent. Step 5 used to do that weighting and sorting itself,
-    # since ordering on rate alone puts a channel off a trace isotope on top.
+    # rate times the parent's atom density, since ordering on rate alone would
+    # put a channel off a trace isotope on top.
     #
     # Routes are asked for over the first irradiation pulse. Every pulse in
     # these schedules shares one spectrum, so the shares are the same for each,
@@ -464,7 +456,7 @@ def run(case, cross_sections, chain, uncertainty=None):
     #
     # Only for products that carry heat. Walking every nuclide the chain can
     # reach costs time to answer a question about nuclides nobody will read a
-    # row for; the floor is under step 5's own so the report can still choose.
+    # row for; the floor is under step 3's own so the report can still choose.
     peak = {}
     for step in breakdown:
         total = sum(step.values()) or 1.0
@@ -691,31 +683,9 @@ def main():
     uncertainty = None if args.no_uncertainty else yani.DataUncertainty(
         seed=args.seed, samples=args.samples)
 
-    try:
-        (calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
-         info, routes, branching, provenance) = run(
-            case, args.cross_sections, args.chain, uncertainty)
-    except ValueError as error:
-        # yani refuses a cross-section folder laid out for an older wheel, since
-        # yani-core 0.17.0 the union energy grids live in their own energy.arrow
-        # and a folder without one has nothing to interpolate against. Its
-        # message offers a re-download or a migration tool, which is right for
-        # the published libraries and wrong here: these folders were made by
-        # step 1 on this machine, and step 1 reconverts whatever the installed
-        # yani cannot read, so the remedy is to run it again.
-        if "Arrow format version" not in str(error):
-            raise
-        again = ["python", "convert_to_arrow.py", "--case", args.case]
-        if source != data_source.slug(args.library, None, None):
-            again += ["--source", source]
-        raise SystemExit(
-            f"{error}\n\n"
-            f"The cross sections under {args.cross_sections} were written by an older "
-            "yani, in a layout this one does not read. They were converted here rather "
-            "than downloaded, so rerun step 1 with the same --endf-dir and --library as "
-            "before:\n  " + " ".join(again) + "\n"
-            "It redoes only the isotopes this yani cannot read and leaves the rest alone."
-        ) from None
+    (calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
+     info, routes, branching, provenance) = run(
+        case, args.cross_sections, args.chain, uncertainty)
     ratio, metrics = summarise(case, calculated)
     plot(case, calculated, breakdown, ratio, metrics, args.output, sigma)
 

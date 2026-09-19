@@ -50,13 +50,6 @@ is not on PyPI, so `requirements.txt` adds a wheel index for it. The `yani`
 wheel both reads the nuclear data and makes it: the ENDF conversion, the reaction topology and the isomeric
 branching are all functions on the wheel.
 
-The floor on that wheel is 0.17.0, and it is a floor on the published data as
-much as on the API: each wheel pins the build of the nuclear data it expects, so
-one older than the 2026-09-18 republish refuses the decay sublibrary step 2
-downloads. [The decay data is a dated build](#the-decay-data-is-a-dated-build-and-the-wheel-pins-which-one)
-says what that is about, and what to do with Arrow data converted under an
-older wheel.
-
 The wheels are abi3 from Python 3.10 up, one per platform rather than one per
 Python version, published for Linux x86_64, Windows x64 and macOS arm64. There
 is no Rust toolchain to install and nothing is compiled here.
@@ -148,8 +141,8 @@ you nothing: evaluations are matched on their filename wherever they sit.
 The last form transfers around 3 GB whatever you asked for, because TENDL
 publishes its neutron sublibrary as a single archive; only the wanted members
 are written to disk. Conversion runs about twenty seconds per isotope, and an
-isotope already converted under the same library is reused, so that twenty
-seconds is paid once. `--force` redoes it.
+isotope already converted under the same library is reused if the installed
+YANI can read it, so that twenty seconds is paid once. `--force` redoes it.
 
 `run_transmutation.py` writes `results/<source>/fns_<case>_<experiment>.png` and
 a JSON of the same numbers, including the per-nuclide breakdown of the heat and
@@ -215,7 +208,7 @@ difference smaller than that foil's measurement sigma is called a tie, because
 most of these foils agree within it and a difference below sigma is not a
 result.
 
-The tie threshold is the measurement's sigma alone, which is now the narrower of
+The tie threshold is the measurement's sigma alone, which is the narrower of
 the two available. `sweep_fns.py` carries a `data sigma` column per foil, the
 median nuclear-data uncertainty on that foil's calculated heat, and on several
 foils it is the larger number: a 6% difference between two libraries on a foil
@@ -320,7 +313,7 @@ Routes are whole strings, `W186(n,2n)W185m(IT)W185`, one neutron reaction off an
 isotope of the foil and then the decay steps that carry the product on. **YANI
 works them out, not this repo.** Step 2 asks
 `TransmutationResults.get_production_routes` and files the answer beside the
-heat; step 5 binds it. That matters because a route is a statement about the
+heat; step 3 binds it. That matters because a route is a statement about the
 rates a solve ran with as much as about the topology, and deriving it later
 means loading the chain a second time and hoping it is the one that produced the
 numbers.
@@ -373,8 +366,7 @@ calculation is a statement about that product.
 
 The last column of that table, `%ΔCnuc`, and the `+/- 6%` the published reports
 print beside every calculated µW/g, are both cross-section covariance carried
-through the inventory. Neither was reachable until YANI 0.11.1 and both are now
-filled.
+through the inventory.
 
 Step 1 writes the MF=33 covariance as a `covariance.arrow` beside each nuclide.
 That is on by default, because it is nearly free: on W186 it costs no measurable
@@ -382,7 +374,7 @@ NJOY time and 78 kB against a 2.0 MB nuclide. Step 2 then resamples the
 activation cross sections from it, folds each draw against the foil's own
 spectrum and re-solves the schedule, and the spread over that ensemble is the
 number. The solver is untouched and only its input moves, so the mean inventory
-is what it always was: `--no-uncertainty` reproduces the old bare value exactly,
+is what it always was: `--no-uncertainty` gives the same mean exactly,
 and the whole ensemble costs about a second.
 
 On W/2000exp_5min against TENDL-2025 the calculated heat comes out good to 5.5%
@@ -395,7 +387,7 @@ Two things about that number are worth knowing before it is used.
 It is **the activation cross sections**, in practice and not by construction.
 Half-lives, decay branching ratios, fission yields and the isomeric-branching
 overlay are held at their evaluated values. The flux is the one that could move
-and does not: YANI 0.12.0 perturbs the spectrum as a second source and asks for
+and does not: YANI perturbs the spectrum as a second source and asks for
 both by default (`DataUncertainty.available_sources()` returns
 `['cross_sections', 'flux_spectrum']`), but the FNS benchmark publishes its
 measured spectrum as 709 group fluxes with no sigma on them, so there is nothing
@@ -575,11 +567,10 @@ apart is reporting something other than the data.
   is not much reason to, since it costs no measurable NJOY time and 4% more
   disk. An evaluation that carries no MF=33 writes none, and step 1 says which.
 
-  It has to come from the ENDF, so an Arrow directory converted before YANI
-  0.11.0 does not have it and cannot be given it without rerunning NJOY. Step 2
-  against one of those does not fail and does not report zero: it says no
-  covariance was available and names the reconversion, and the report leaves
-  both columns empty.
+  It has to come from the ENDF, so a directory converted with `--no-covariance`
+  cannot be given it without rerunning NJOY. Step 2 against one does not fail
+  and does not report zero: it says no covariance was available and names the
+  reconversion, and the report leaves both columns empty.
 
 The first two matter for the same reason: every part of the answer that comes from
 somewhere other than the library under test makes the C/E harder to read. Mean
@@ -698,28 +689,10 @@ burning the nuclide while losing its fission products.
 ### The decay data is a dated build, and the wheel pins which one
 
 What YANI downloads is not "endf-b8.1" in the abstract but one build of it,
-stamped with a `data_version`. Every wheel pins the build it expects and refuses
-a download reporting another one, so the wheel and the data move together: a
-wheel older than the last republish cannot read the current data at all, and
-fails saying so in the first seconds of a run rather than serving something
-stale. All six published libraries were republished on 2026-09-18, which is why
-`requirements.txt` floors YANI at 0.17.0. Nothing below that can fetch the decay
-sublibrary this example runs on.
-
-The same republish changed the layout of the cross sections, and that reaches
-the data step 1 makes here as well as the data step 2 downloads. The union
-energy grid every cross section is interpolated against used to be two columns
-of `nuclide.arrow`; it is now a section of its own, `energy.arrow`, one record
-batch per temperature, and `version.json` stamps the folder `format_version` 2.
-YANI reads that layout only. A folder without the grids is refused outright
-rather than read against nothing, because a cross section with no energy axis
-is not a worse answer but no answer, and its message says so in the first
-seconds. So an Arrow directory converted under a wheel older than 0.17.0 does
-not work with 0.17.0, and the remedy is to run step 1 again: it asks YANI to
-read each folder it would otherwise reuse and reconverts the ones YANI cannot,
-leaving the rest alone, so the cost is NJOY time on the foil's own isotopes and
-nothing else. No value moved in the relayout, and the tables below reproduce to
-the digit.
+stamped with a `data_version`. The wheel pins the build it expects and refuses
+a download reporting another one, so the wheel and the data move together, and
+a mismatch fails saying so in the first seconds of a run rather than serving
+something stale. The build this example runs on is 2026-09-18.
 
 That build also says what it knows it cannot vouch for, in the decay
 subsection's `provenance.json`, and step 3 puts both records on the nuclear data

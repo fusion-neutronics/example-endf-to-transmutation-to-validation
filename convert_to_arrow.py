@@ -44,10 +44,9 @@ comes from an isomer, and ``--no-reactions`` leaves the topology on endf-b8.1.
 A fourth thing comes out of the same evaluations: the MF=33 cross-section
 covariance, written as ``covariance.arrow`` beside each nuclide. That is what
 puts an uncertainty on the calculated decay heat, which the published reports
-print and this example could not until yani-core 0.11.0 read it. It is on by
-default because it is close to free: on W186 it costs no measurable NJOY time
-and 78 kB against a 2.0 MB nuclide. ``--no-covariance`` leaves it out, and
-step 2 then reports a bare value as it used to.
+print. It is on by default because it is close to free: on W186 it costs no
+measurable NJOY time and 78 kB against a 2.0 MB nuclide. ``--no-covariance``
+leaves it out, and step 2 then reports a bare value.
 """
 
 import argparse
@@ -198,12 +197,10 @@ def tendl_name(nuclide):
     ground state under the isomer's name would quietly convert the wrong
     evaluation.
 
-    The name comes apart with `yani.data.split_nuclide`, which is where that
-    belongs: stripping the digits off "Ta180_m1" leaves "Ta180_m" and a mass
-    number of 1, and natural tantalum really does contain Ta180m, so this file
-    used to carry its own splitter to avoid exactly that. yani exposes the one
-    the rest of the network already uses, so the two cannot disagree about what
-    a name means.
+    The name comes apart with `yani.data.split_nuclide`, the splitter the rest
+    of the network uses, so the two cannot disagree about what a name means.
+    Stripping the digits off "Ta180_m1" would leave "Ta180_m" and a mass number
+    of 1, and natural tantalum really does contain Ta180m.
     """
     symbol, mass, state = yani.data.split_nuclide(nuclide)
     suffix = "" if not state else "m" + ("" if state == 1 else str(state))
@@ -223,15 +220,12 @@ def already_converted(target, library):
     different library is not this one's, and reusing it would be the same class
     of mistake as reusing another foil's chain: silently right-looking and wrong.
 
-    The layout is checked as well, by asking the installed yani to read the
-    folder rather than by comparing a format number kept here. yani-core 0.17.0
-    moved the union energy grids out of `nuclide.arrow` into their own
-    `energy.arrow` and refuses the older layout outright, since a cross section
-    read against no grid is not a worse answer but none at all. A folder this
-    yani cannot read is therefore not a conversion at all as far as step 2 is
-    concerned, whatever its stamp says, and it is redone. The read is the same
-    one the reaction-rate collapse does, three files and no download, so it
-    costs milliseconds against the quarter of a minute NJOY takes.
+    The folder is also asked to load, through the installed yani, because a
+    stamp says who wrote it and not whether what it wrote is readable. A folder
+    yani refuses is not a conversion as far as step 2 is concerned, whatever
+    its stamp says, and it is redone. The read is the same one the
+    reaction-rate collapse does, three files and no download, so it costs
+    milliseconds against the quarter of a minute NJOY takes.
 
     What this cannot see is a change of conversion SETTINGS. Data converted with
     --no-covariance looks exactly like data converted with it for a nuclide whose
@@ -303,10 +297,10 @@ def fetch_tendl(tarball, work_dir, nuclides, library):
 def _is_whole_sublibrary(directory):
     """Whether a decay directory holds more than the metastable evaluations.
 
-    Earlier versions of this script kept only the metastable files, which is
-    all the isomer table reads. The reaction topology needs the whole
-    sublibrary, so a directory left behind by one of those runs has to be
-    filled in rather than trusted.
+    The isomer table reads only the metastable files, but the reaction topology
+    needs the whole sublibrary, so a directory holding only those is refused
+    under --decay-dir and filled in when it is the fetched copy, rather than
+    trusted.
     """
     return any(not fnmatch.fnmatch(path.name, DECAY_ISOMER_GLOB)
                for path in directory.glob(DECAY_GLOB))
