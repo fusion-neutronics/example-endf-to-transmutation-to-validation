@@ -251,9 +251,10 @@ picks foils, `--experiments` picks campaigns, and naming exactly one campaign
 puts it back in the filename as `report_<case>_<experiment>.pdf`.
 
 The calculation's own uncertainty is on the page beside its value, `+/- 6%` and
-`%ΔCnuc` both. A result filed before those existed is still readable: the
-two uncertainty columns are left empty rather than filled with a zero, which
-would be a different claim.
+`%ΔCnuc` both. A run that carried no covariance, because step 1 was given
+`--no-covariance` or step 2 `--no-uncertainty`, leaves the two uncertainty
+columns empty rather than filled with a zero, which would be a different claim,
+and the caption under the table names the flag to drop.
 
 ### Which library a number actually came from
 
@@ -274,10 +275,12 @@ Most cells are the name the data on disk stamps itself with, filed by the run
 that read it rather than taken from the folder it sat in. Two are not. Fission
 yields read "not used", because the run turns that subsection off rather than
 naming a library nothing draws on, and the half-lives row is filled at report
-time from `--decay`. A result filed before step 2 recorded any of this leaves
-its cells empty and is named under the table, instead of having its folder name
-guessed into it. The same record is in `report_<case>.json`, per library per
-campaign.
+time from `--decay`. A result that does not carry this record, or the
+production routes and isomeric branching the pathway pages need, was filed by
+an earlier step 2. The report refuses it, naming the file and what it lacks,
+and asks for step 2 to be rerun on that foil, rather than guessing a folder
+name into the table or leaving a page half filled. The same record is in
+`report_<case>.json`, per library per campaign.
 
 `--libraries` is also how to say which library is the primary one, whose
 absolute values the table carries:
