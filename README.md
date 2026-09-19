@@ -50,11 +50,12 @@ is not on PyPI, so `requirements.txt` adds a wheel index for it. The `yani`
 wheel both reads the nuclear data and makes it: the ENDF conversion, the reaction topology and the isomeric
 branching are all functions on the wheel.
 
-The floor on that wheel is 0.16.0, and it is a floor on the published data as
+The floor on that wheel is 0.17.0, and it is a floor on the published data as
 much as on the API: each wheel pins the build of the nuclear data it expects, so
-one older than the 2026-09-08 republish refuses the decay sublibrary step 2
+one older than the 2026-09-18 republish refuses the decay sublibrary step 2
 downloads. [The decay data is a dated build](#the-decay-data-is-a-dated-build-and-the-wheel-pins-which-one)
-says what that is about.
+says what that is about, and what to do with Arrow data converted under an
+older wheel.
 
 The wheels are abi3 from Python 3.10 up, one per platform rather than one per
 Python version, published for Linux x86_64, Windows x64 and macOS arm64. There
@@ -550,7 +551,8 @@ JEFF-4.0 adopted ENDF/B-VIII.1's tungsten wholesale. The two files on disk agree
 byte for byte over MF=2, MF=3, MF=8 and MF=33. What differs is MF=1, which is
 descriptive text, and one endpoint of the MF=10 grid at 150 MeV, an order of
 magnitude in energy above the 14 MeV a D-T source produces and outside this
-spectrum entirely. The converted `nuclide.arrow` files hash the same. Two
+spectrum entirely. The converted Arrow files hash the same, `energy.arrow`,
+`reactions.arrow` and `covariance.arrow` alike, for all five isotopes. Two
 libraries carrying one evaluation give one answer, and anything that shows them
 apart is reporting something other than the data.
 
@@ -700,9 +702,24 @@ stamped with a `data_version`. Every wheel pins the build it expects and refuses
 a download reporting another one, so the wheel and the data move together: a
 wheel older than the last republish cannot read the current data at all, and
 fails saying so in the first seconds of a run rather than serving something
-stale. All six published libraries were republished on 2026-09-08, which is why
-`requirements.txt` floors YANI at 0.16.0. Nothing below that can fetch the decay
+stale. All six published libraries were republished on 2026-09-18, which is why
+`requirements.txt` floors YANI at 0.17.0. Nothing below that can fetch the decay
 sublibrary this example runs on.
+
+The same republish changed the layout of the cross sections, and that reaches
+the data step 1 makes here as well as the data step 2 downloads. The union
+energy grid every cross section is interpolated against used to be two columns
+of `nuclide.arrow`; it is now a section of its own, `energy.arrow`, one record
+batch per temperature, and `version.json` stamps the folder `format_version` 2.
+YANI reads that layout only. A folder without the grids is refused outright
+rather than read against nothing, because a cross section with no energy axis
+is not a worse answer but no answer, and its message says so in the first
+seconds. So an Arrow directory converted under a wheel older than 0.17.0 does
+not work with 0.17.0, and the remedy is to run step 1 again: it asks YANI to
+read each folder it would otherwise reuse and reconverts the ones YANI cannot,
+leaving the rest alone, so the cost is NJOY time on the foil's own isotopes and
+nothing else. No value moved in the relayout, and the tables below reproduce to
+the digit.
 
 That build also says what it knows it cannot vouch for, in the decay
 subsection's `provenance.json`, and step 3 puts both records on the nuclear data

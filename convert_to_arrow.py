@@ -223,6 +223,16 @@ def already_converted(target, library):
     different library is not this one's, and reusing it would be the same class
     of mistake as reusing another foil's chain: silently right-looking and wrong.
 
+    The layout is checked as well, by asking the installed yani to read the
+    folder rather than by comparing a format number kept here. yani-core 0.17.0
+    moved the union energy grids out of `nuclide.arrow` into their own
+    `energy.arrow` and refuses the older layout outright, since a cross section
+    read against no grid is not a worse answer but none at all. A folder this
+    yani cannot read is therefore not a conversion at all as far as step 2 is
+    concerned, whatever its stamp says, and it is redone. The read is the same
+    one the reaction-rate collapse does, three files and no download, so it
+    costs milliseconds against the quarter of a minute NJOY takes.
+
     What this cannot see is a change of conversion SETTINGS. Data converted with
     --no-covariance looks exactly like data converted with it for a nuclide whose
     evaluation states no MF=33, so the two cannot be told apart from the output
@@ -233,9 +243,21 @@ def already_converted(target, library):
     if not stamp.is_file():
         return False
     try:
-        return json.loads(stamp.read_text()).get("library") == library
+        if json.loads(stamp.read_text()).get("library") != library:
+            return False
     except (OSError, ValueError):
         return False
+    try:
+        yani.read_nuclide_from_arrow(str(target), scope="xs")
+    except RuntimeError as error:
+        # Said once per folder rather than folded into the REUSE count, because
+        # a reconversion the user did not ask for is worth a line saying why.
+        # yani's message leads with the path and closes with a remedy meant for
+        # downloaded data; the middle is the reason.
+        reason = str(error).removeprefix(f"{target}: ").split(". ", 1)[0]
+        print(f"{target.name}: this yani cannot read it ({reason}), so it is reconverted")
+        return False
+    return True
 
 
 def fetch_tendl(tarball, work_dir, nuclides, library):

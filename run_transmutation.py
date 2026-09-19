@@ -691,9 +691,31 @@ def main():
     uncertainty = None if args.no_uncertainty else yani.DataUncertainty(
         seed=args.seed, samples=args.samples)
 
-    (calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
-     info, routes, branching, provenance) = run(
-        case, args.cross_sections, args.chain, uncertainty)
+    try:
+        (calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
+         info, routes, branching, provenance) = run(
+            case, args.cross_sections, args.chain, uncertainty)
+    except ValueError as error:
+        # yani refuses a cross-section folder laid out for an older wheel, since
+        # yani-core 0.17.0 the union energy grids live in their own energy.arrow
+        # and a folder without one has nothing to interpolate against. Its
+        # message offers a re-download or a migration tool, which is right for
+        # the published libraries and wrong here: these folders were made by
+        # step 1 on this machine, and step 1 reconverts whatever the installed
+        # yani cannot read, so the remedy is to run it again.
+        if "Arrow format version" not in str(error):
+            raise
+        again = ["python", "convert_to_arrow.py", "--case", args.case]
+        if source != data_source.slug(args.library, None, None):
+            again += ["--source", source]
+        raise SystemExit(
+            f"{error}\n\n"
+            f"The cross sections under {args.cross_sections} were written by an older "
+            "yani, in a layout this one does not read. They were converted here rather "
+            "than downloaded, so rerun step 1 with the same --endf-dir and --library as "
+            "before:\n  " + " ".join(again) + "\n"
+            "It redoes only the isotopes this yani cannot read and leaves the rest alone."
+        ) from None
     ratio, metrics = summarise(case, calculated)
     plot(case, calculated, breakdown, ratio, metrics, args.output, sigma)
 

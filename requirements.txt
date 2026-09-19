@@ -15,7 +15,7 @@ njoy2016
 # `PIL`). Wheels are published for Linux x86_64, Windows x64 and macOS arm64,
 # abi3 from Python 3.10 up, so there is nothing to build.
 #
-# The floor buys thirteen things, all of them load-bearing here:
+# The floor buys fourteen things, all of them load-bearing here:
 #
 #   * `TransmutationChain.decays` (0.8), so make_report.py can follow a
 #     production route past its neutron reaction. Without it a route stops at
@@ -67,14 +67,15 @@ njoy2016
 #   * A chain built for a different foil is refused by `transmute` (0.13.0)
 #     rather than solving to an inventory of nothing. run_transmutation.py used
 #     to write a `scope.json` sidecar beside each chain and check it itself.
-#   * The `data_version` the published libraries carry (0.16.0). This is the
-#     one entry that is not about a function. Every wheel pins the release it
-#     expects and refuses a download that reports another one, so the wheel and
-#     the data move together and a floor on the wheel is a floor on the data.
-#     All six libraries were republished on 2026-09-08. 0.14.0 expects
-#     2026-08-21 and 0.15.0 expects 2026-09-02, so both refuse the endf-b8.1
-#     decay sublibrary step 2 fetches, and they refuse it in the first seconds
-#     of a run rather than serving something stale.
+#   * The `data_version` the published libraries carry (0.16.0, and moved
+#     again in 0.17.0). This is the one entry that is not about a function.
+#     Every wheel pins the release it expects and refuses a download that
+#     reports another one, so the wheel and the data move together and a floor
+#     on the wheel is a floor on the data. All six libraries were republished
+#     on 2026-09-18. 0.14.0 expects 2026-08-21, 0.15.0 expects 2026-09-02 and
+#     0.16.0 expects 2026-09-08, so each refuses the endf-b8.1 decay sublibrary
+#     step 2 fetches, and refuses it in the first seconds of a run rather than
+#     serving something stale.
 #   * `decay_energy_placeholders` and `decay_inconsistencies` in that
 #     sublibrary's `provenance.json`, which the 2026-09-08 rebuild is the first
 #     to carry and make_report.py's nuclear data page now reads. Decay heat is
@@ -83,16 +84,27 @@ njoy2016
 #     rather than an evaluated scheme is carrying a placeholder straight into
 #     the answer. 1144 nuclides are on that list, and the page names the ones a
 #     foil's heat actually runs through instead of leaving them to be found.
+#   * `energy.arrow`, the layout the 2026-09-18 republish is in (0.17.0). The
+#     union energy grids every cross section is interpolated against moved out
+#     of `nuclide.arrow` into their own section, one record batch per
+#     temperature, and `version.json` stamps the folder `format_version` 2. The
+#     loader reads that layout only: a folder without the grids is refused
+#     rather than read against nothing, since there is no best-effort version
+#     of a cross section with no energy axis. `convert_neutron_xs` on this
+#     wheel writes it, so step 1 and step 2 on the same wheel agree, and
+#     convert_to_arrow.py asks yani to read each folder it would otherwise
+#     reuse, so one written by an older wheel is redone rather than skipped,
+#     and run_transmutation.py names that rerun when it meets one first.
+#     Nothing here reads the grids directly, which is why the move cost this
+#     example nothing beyond those two.
 #
-# 0.16.0 for both names: `yani` 0.16.0 pins `yani-core==0.16.0`, so the wrapper
+# 0.17.0 for both names: `yani` 0.17.0 pins `yani-core==0.17.0`, so the wrapper
 # and the compiled wheel move together and a floor on the one is a floor on the
-# other. 0.15.0 was never published to PyPI, so the previous floor resolved to
-# 0.16.0 anyway; what it did not do is say why nothing earlier will serve, which
-# is now a statement about the data and not only about the API.
+# other.
 #
 # A floor turns each of those into an unsatisfiable requirement pip reports up
 # front, rather than an AttributeError partway through a run.
-yani>=0.16.0
+yani>=0.17.0
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no
