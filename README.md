@@ -738,3 +738,12 @@ energies scale the answer directly. Two consequences follow:
   gives 122% and TENDL-2017 gives 84.5% on the same foil, against the same
   decay data, and 97% of that heat is W185m. That is a statement about how much
   W185m each library makes, and nothing else.
+
+## Licence
+
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
