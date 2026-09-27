@@ -479,10 +479,9 @@ def coverage_note(result):
     The two uncertainty columns are only honest next to this. A nuclide whose
     evaluation states no MF=33 is perturbed by nothing and comes back exact,
     which is indistinguishable on the page from one that is well determined;
-    samples truncated at zero bias the mean upward; and sigmas that had not
-    settled are a floor rather than a value. All three are counted by yani
-    rather than inferred here, so this cannot claim a coverage the run did not
-    have.
+    and sigmas that had not settled are a floor rather than a value. Both are
+    counted by yani rather than inferred here, so this cannot claim a coverage
+    the run did not have.
     """
     info = result.get("data_uncertainty_info")
     if not info or uncertainty_of(result) is None:
@@ -508,12 +507,6 @@ def coverage_note(result):
         parts.append(f"No MF=33 covariance for {', '.join(sorted(missing))}: "
                      f"reactions on them contribute no sigma, so a product made "
                      f"only from them reads as exact.")
-
-    sampled = info.get("rates_sampled") or 0
-    floored = info.get("rates_floored") or 0
-    if sampled and floored / sampled > 0.01:
-        parts.append(f"{100.0 * floored / sampled:.1f}% of sampled rates went "
-                     f"negative and were truncated at zero, biasing the mean up.")
 
     samples = info.get("samples")
     if samples is not None and not info.get("converged", True):
