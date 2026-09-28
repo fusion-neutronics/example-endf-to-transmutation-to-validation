@@ -260,12 +260,29 @@ def report_uncertainty(info, relative):
         lines.append(f"{100.0 * floored / sampled:.1f}% of sampled rates went "
                      f"negative and were truncated at zero, biasing the mean up")
 
-    clipped = info.get("matrices_clipped") or 0
-    if clipped:
-        worst = info.get("worst_relative_clip") or 0.0
-        matrices = "matrix" if clipped == 1 else "matrices"
-        lines.append(f"{clipped} covariance {matrices} repaired to positive "
-                     f"semi-definite, worst by {worst * 100:.1f}%")
+    # Indexed rather than read with a default: these keys are always in the
+    # report, and a rename upstream should fail here, not print nothing.
+    repaired = info["covariance_repaired"]
+    if repaired:
+        # Clipping a matrix's negative eigenvalues only adds variance, so the
+        # repair widens sigmas. The worst figure covers channels a draw can
+        # move; the weighted one is by rate, fluence and initial density.
+        worst = info["worst_sigma_inflation"]
+        weighted = info["rate_weighted_sigma_inflation"]
+        nuclides = "nuclide" if len(repaired) == 1 else "nuclides"
+        line = (f"covariance repaired to positive semi-definite for "
+                f"{len(repaired)} {nuclides}, widening the worst sampled "
+                f"sigma by {worst * 100:.1f}%")
+        if weighted is not None:
+            line += f" and the rate-weighted mean by {weighted * 100:.2f}%"
+        lines.append(line)
+
+    for threshold in ("one", "ten"):
+        wide = info[f"sigma_at_least_{threshold}"]
+        if wide:
+            lines.append(f"evaluated relative sigma at least {threshold}, so "
+                         f"the lognormal chosen, not the evaluation alone, sets "
+                         f"the spread: {', '.join(sorted(wide))}")
 
     not_perturbed = info.get("not_perturbed") or []
     if not_perturbed:
