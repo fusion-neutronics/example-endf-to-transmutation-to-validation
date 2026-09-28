@@ -250,16 +250,6 @@ def report_uncertainty(info, relative):
         lines.append(f"nothing published for {' '.join(sorted(missing))}, so "
                      f"reactions on them contribute no sigma")
 
-    # A resampled rate that came out negative is truncated at zero rather than
-    # used, which is right (a negative reaction rate is not a physical draw) and
-    # is not free: the truncated draws are all on one side, so the ensemble mean
-    # sits above the unperturbed value. Reported when it is common enough to
-    # matter, on the same terms the report page prints it under the table.
-    sampled, floored = info.get("rates_sampled") or 0, info.get("rates_floored") or 0
-    if sampled and floored / sampled > 0.01:
-        lines.append(f"{100.0 * floored / sampled:.1f}% of sampled rates went "
-                     f"negative and were truncated at zero, biasing the mean up")
-
     # Indexed rather than read with a default: these keys are always in the
     # report, and a rename upstream should fail here, not print nothing.
     repaired = info["covariance_repaired"]
