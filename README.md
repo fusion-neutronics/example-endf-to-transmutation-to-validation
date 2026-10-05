@@ -695,7 +695,7 @@ What YANI downloads is not "endf-b8.1" in the abstract but one build of it,
 stamped with a `data_version`. The wheel pins the build it expects and refuses
 a download reporting another one, so the wheel and the data move together, and
 a mismatch fails saying so in the first seconds of a run rather than serving
-something stale. The build this example runs on is 2026-09-18.
+something stale. The build this example runs on is 2026-10-01.
 
 That build also says what it knows it cannot vouch for, in the decay
 subsection's `provenance.json`, and step 3 puts both records on the nuclear data
