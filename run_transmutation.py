@@ -252,18 +252,30 @@ def report_uncertainty(info, relative):
 
     # Indexed rather than read with a default: these keys are always in the
     # report, and a rename upstream should fail here, not print nothing.
-    repaired = info["covariance_repaired"]
-    if repaired:
-        # Clipping a matrix's negative eigenvalues only adds variance, so the
-        # repair widens sigmas. The worst figure covers channels a draw can
-        # move; the weighted one is by rate, fluence and initial density.
-        worst = info["worst_sigma_inflation"]
-        weighted = info["rate_weighted_sigma_inflation"]
-        nuclides = "nuclide" if len(repaired) == 1 else "nuclides"
-        line = (f"covariance repaired to positive semi-definite for "
-                f"{len(repaired)} {nuclides}, widening the worst sampled "
-                f"sigma by {worst * 100:.1f}%")
-        if weighted is not None:
+    repairs = info["covariance_repairs"]
+    outside = info["covariance_repaired_outside_bound"]
+    if repairs or outside:
+        # A covariance that is not positive semi-definite is replaced by the
+        # nearest correlation matrix, rescaled by the evaluated sigmas, so
+        # every cell keeps its sigma and only correlations move. A channel
+        # summing several cells can still come out at another sigma, which is
+        # what the two figures measure: the worst over channels a draw can
+        # move, and the mean weighted by rate, fluence and initial density.
+        nuclides = sorted({r["nuclide"] for r in repairs})
+        line = (f"covariance repaired to the nearest correlation matrix for "
+                f"{len(nuclides)} nuclide{'' if len(nuclides) == 1 else 's'}")
+        if outside:
+            # Counted, not listed: on a long chain these run to dozens of
+            # nuclides the run barely reaches. The JSON names them.
+            line += f" (and {len(outside)} outside the populated set)"
+        worst = info["worst_sigma_change"]
+        weighted = info["rate_weighted_sigma_change"]
+        if worst == float("inf"):
+            line += (", giving a spread to a channel the evaluation states "
+                     "with no variance")
+        elif worst:
+            line += f", moving the worst sampled sigma by {worst * 100:.1f}%"
+        if weighted is not None and weighted != float("inf"):
             line += f" and the rate-weighted mean by {weighted * 100:.2f}%"
         lines.append(line)
 
