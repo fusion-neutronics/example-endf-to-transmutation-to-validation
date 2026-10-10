@@ -513,11 +513,13 @@ def coverage_note(result):
         parts.append(f"The spread had not settled at {samples} replicas, so these "
                      f"sigmas are a floor.")
 
-    # Deliberately not on the page: `covariance_repaired`, the nuclides whose
-    # covariance was not positive semi-definite and had to be repaired before it
-    # could be sampled from. It is real and it is in the JSON and on step 2's
-    # stdout, with `worst_sigma_inflation` and `rate_weighted_sigma_inflation`
-    # giving how far the repair (which only adds variance) widened the sigmas.
+    # Deliberately not on the page: `covariance_repairs`, the nuclides whose
+    # covariance was not positive semi-definite and was replaced by the nearest
+    # correlation matrix before it could be sampled from. Every cell keeps its
+    # evaluated sigma and only correlations move, so a channel's sampled sigma
+    # changes only where it sums several cells. It is real and it is in the JSON
+    # and on step 2's stdout, with `worst_sigma_change` and
+    # `rate_weighted_sigma_change` giving how far.
     # What is kept above is the set that changes how a number is read.
     return " ".join(parts) or None
 

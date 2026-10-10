@@ -402,7 +402,7 @@ def run(case, cross_sections, chain, uncertainty=None):
     cooling_steps = range(len(case.irradiation) + 1, results.num_steps + 1)
     sigma, by_nuclide_sigma, info = None, None, None
     if uncertainty is not None:
-        info = results.data_uncertainty_info
+        info = results.get_data_uncertainty_info(material_id)
         ensemble = decay_heat_spread(
             results, material_id, case, cooling_steps,
             keys=sorted({n for step in breakdown for n in step}))
