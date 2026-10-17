@@ -1,0 +1,51 @@
+name: Scripts
+
+# The example is a set of scripts run by hand, and nothing ran them in CI: a
+# requirement PyPI cannot satisfy, or an import that fails, went unnoticed until
+# someone followed the README. This installs requirements.txt exactly as the
+# README says and runs what needs no nuclear data: every script's --help (which
+# imports yani where the script does) and the case listing. The conversion and
+# the transmutation runs download and process data, so they stay out of here.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke:
+    name: Install and start the scripts (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Python the wheels support, and the newest.
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the requirements
+        run: python -m pip install -r requirements.txt
+      - name: Compile every script
+        run: python -m compileall -q .
+      - name: Start every script
+        run: |
+          set -euo pipefail
+          for script in build_fns_data.py compare_libraries.py convert_to_arrow.py \
+                        make_report.py run_transmutation.py sweep_fns.py; do
+            echo "::group::$script --help"
+            python "$script" --help
+            echo "::endgroup::"
+          done
+      - name: List the cases
+        run: python run_transmutation.py --list

@@ -250,12 +250,41 @@ def report_uncertainty(info, relative):
         lines.append(f"nothing published for {' '.join(sorted(missing))}, so "
                      f"reactions on them contribute no sigma")
 
-    clipped = info.get("matrices_clipped") or 0
-    if clipped:
-        worst = info.get("worst_relative_clip") or 0.0
-        matrices = "matrix" if clipped == 1 else "matrices"
-        lines.append(f"{clipped} covariance {matrices} repaired to positive "
-                     f"semi-definite, worst by {worst * 100:.1f}%")
+    # Indexed rather than read with a default: these keys are always in the
+    # report, and a rename upstream should fail here, not print nothing.
+    repairs = info["covariance_repairs"]
+    outside = info["covariance_repaired_outside_bound"]
+    if repairs or outside:
+        # A covariance that is not positive semi-definite is replaced by the
+        # nearest correlation matrix, rescaled by the evaluated sigmas, so
+        # every cell keeps its sigma and only correlations move. A channel
+        # summing several cells can still come out at another sigma, which is
+        # what the two figures measure: the worst over channels a draw can
+        # move, and the mean weighted by rate, fluence and initial density.
+        nuclides = sorted({r["nuclide"] for r in repairs})
+        line = (f"covariance repaired to the nearest correlation matrix for "
+                f"{len(nuclides)} nuclide{'' if len(nuclides) == 1 else 's'}")
+        if outside:
+            # Counted, not listed: on a long chain these run to dozens of
+            # nuclides the run barely reaches. The JSON names them.
+            line += f" (and {len(outside)} outside the populated set)"
+        worst = info["worst_sigma_change"]
+        weighted = info["rate_weighted_sigma_change"]
+        if worst == float("inf"):
+            line += (", giving a spread to a channel the evaluation states "
+                     "with no variance")
+        elif worst:
+            line += f", moving the worst sampled sigma by {worst * 100:.1f}%"
+        if weighted is not None and weighted != float("inf"):
+            line += f" and the rate-weighted mean by {weighted * 100:.2f}%"
+        lines.append(line)
+
+    for threshold in ("one", "ten"):
+        wide = info[f"sigma_at_least_{threshold}"]
+        if wide:
+            lines.append(f"evaluated relative sigma at least {threshold}, so "
+                         f"the lognormal chosen, not the evaluation alone, sets "
+                         f"the spread: {', '.join(sorted(wide))}")
 
     not_perturbed = info.get("not_perturbed") or []
     if not_perturbed:
@@ -373,7 +402,7 @@ def run(case, cross_sections, chain, uncertainty=None):
     cooling_steps = range(len(case.irradiation) + 1, results.num_steps + 1)
     sigma, by_nuclide_sigma, info = None, None, None
     if uncertainty is not None:
-        info = results.data_uncertainty_info
+        info = results.get_data_uncertainty_info(material_id)
         ensemble = decay_heat_spread(
             results, material_id, case, cooling_steps,
             keys=sorted({n for step in breakdown for n in step}))
