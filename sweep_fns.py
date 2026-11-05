@@ -2,14 +2,20 @@
 """Step 3: every FNS foil, one library, one table.
 
 Runs convert_to_arrow.py and run_transmutation.py over all 73 foils and
-collects what came out into a ranked table. One foil says whether a handful of
+collects what came out into a ranked table per campaign. One foil says whether a handful of
 cross sections are right; 73 of them say whether a library is.
 
     sweep_fns.py --endf-dir /path/to/tendl-2025
     sweep_fns.py --endf-dir /path/to/endfb-8.1 --library endf-b8.1
+    sweep_fns.py --published --library jeff-4.0 --experiment all
 
-A local copy of the library is required, either `--endf-dir`, `$ENDF_DIR` or
-`--tarball`. convert_to_arrow.py on its own will stream TENDL-n.tgz for the few
+`--published` runs every foil on yani's published release of the library,
+downloaded on first use, and converts nothing: no ENDF, no NJOY. `--experiment
+all` runs each foil in every campaign it was measured in, which is what
+make_report.py needs to bind a foil's full report.
+
+Without `--published` a local copy of the library is required, either
+`--endf-dir`, `$ENDF_DIR` or `--tarball`. convert_to_arrow.py on its own will stream TENDL-n.tgz for the few
 isotopes one foil needs, which is a reasonable trade once and a terrible one
 73 times.
 
@@ -50,9 +56,14 @@ HERE = pathlib.Path(__file__).resolve().parent
 
 
 def run_case(case, experiment, results, converter_args, runner_args):
-    """Convert and run one foil. Returns its summary, or None if it failed."""
-    for script, extra in [("convert_to_arrow.py", converter_args),
-                          ("run_transmutation.py", runner_args)]:
+    """Convert and run one foil. Returns its summary, or None if it failed.
+
+    `converter_args` of None skips the conversion, for a published sweep.
+    """
+    steps = [("run_transmutation.py", runner_args)]
+    if converter_args is not None:
+        steps.insert(0, ("convert_to_arrow.py", converter_args))
+    for script, extra in steps:
         command = [sys.executable, str(HERE / script), "--case", case,
                    "--experiment", experiment, *extra]
         finished = subprocess.run(command, capture_output=True, text=True)
@@ -126,17 +137,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--experiment", default="2000exp_5min",
-                        help="which campaign to run (default: 2000exp_5min, the only "
+                        help="which campaign to run, or `all` for every campaign each "
+                             "foil was measured in (default: 2000exp_5min, the only "
                              "one covering all 73 foils)")
     parser.add_argument("--cases", nargs="+", help="only these foils (default: all of them)")
+    parser.add_argument("--published", action="store_true",
+                        help="skip convert_to_arrow.py and run every foil on yani's "
+                             "published release of --library, downloaded on first use. "
+                             "Needs no ENDF, no NJOY and no local copy of the library")
     parser.add_argument("--endf-dir", type=pathlib.Path,
                         help="passed to convert_to_arrow.py; also read from $ENDF_DIR")
     parser.add_argument("--tarball", type=pathlib.Path,
                         help="local TENDL-n.tgz, used instead of --endf-dir")
     parser.add_argument("--library", default=data_source.DEFAULT_LIBRARY,
-                        help="passed to convert_to_arrow.py, and the name this "
-                             "sweep's data and results are filed under. "
-                             f"Downloadable: {', '.join(sorted(data_source.TENDL_TARBALLS))} "
+                        help="the library to run, and the name this sweep's data and "
+                             "results are filed under. With --published any library "
+                             "yani publishes; otherwise passed to convert_to_arrow.py, "
+                             f"which can download {', '.join(sorted(data_source.TENDL_TARBALLS))} "
                              f"(default: {data_source.DEFAULT_LIBRARY})")
     parser.add_argument("--cross-sections", type=pathlib.Path, default=None,
                         help="Arrow directory (default: data/<source>/neutron)")
@@ -149,26 +166,50 @@ def main():
     parser.add_argument("--source", default=None,
                         help="folder name to file this run's data and results under "
                              "(default: the library name, or the --endf-dir directory name)")
+    parser.add_argument("--samples", type=int, default=None,
+                        help="passed to run_transmutation.py: a fixed replica count for "
+                             "the uncertainty, which bounds the cost of each foil "
+                             "(default: let yani add replicas until the sigmas settle)")
     args = parser.parse_args()
+
+    if args.published:
+        clashing = [flag for flag, value in [("--endf-dir", args.endf_dir),
+                                             ("--tarball", args.tarball),
+                                             ("--cross-sections", args.cross_sections),
+                                             ("--force", args.force or None)]
+                    if value is not None]
+        if clashing:
+            raise SystemExit(f"--published converts nothing, so {', '.join(clashing)} "
+                             f"would be ignored. Drop one or the other.")
 
     # One folder per data source, so a TENDL-2017 sweep and a TENDL-2025 sweep
     # sit side by side and can be compared (see data_source).
     source = data_source.slug(args.library, args.endf_dir, args.source)
-    if args.cross_sections is None:
+    if args.cross_sections is None and not args.published:
         args.cross_sections = HERE / "data" / source / "neutron"
     if args.output is None:
         args.output = HERE / "results" / source / "sweep"
-    print(f"SOURCE: {source} -> {args.output}")
+    print(f"SOURCE: {source}{' (published)' if args.published else ''} -> {args.output}")
 
+    # Every (foil, campaign) pair to run. `all` takes each foil's campaigns from
+    # the benchmark, so the 1996 campaigns, which measured 30 and 29 of the 73
+    # foils, are run for exactly the foils they cover.
     wanted = args.cases or fns_case.cases()
-    missing = [c for c in wanted if args.experiment not in fns_case.experiments(c)]
-    if missing:
-        raise SystemExit(f"{args.experiment} does not cover {', '.join(missing)}")
+    if args.experiment == "all":
+        jobs = [(case, experiment) for case in wanted
+                for experiment in fns_case.experiments(case)]
+    else:
+        missing = [c for c in wanted if args.experiment not in fns_case.experiments(c)]
+        if missing:
+            raise SystemExit(f"{args.experiment} does not cover {', '.join(missing)}")
+        jobs = [(case, args.experiment) for case in wanted]
 
-    if args.endf_dir is None and args.tarball is None and not os.environ.get("ENDF_DIR"):
+    if (not args.published and args.endf_dir is None and args.tarball is None
+            and not os.environ.get("ENDF_DIR")):
         raise SystemExit(
             "the sweep needs a local copy of the library: --endf-dir, $ENDF_DIR or "
-            "--tarball.\nWithout one, convert_to_arrow.py streams TENDL's 3.5 GB "
+            "--tarball, or --published to run on yani's published data instead.\n"
+            "Without one, convert_to_arrow.py streams TENDL's 3.5 GB "
             f"archive once for each of the {len(wanted)} foils in this sweep."
         )
 
@@ -185,34 +226,47 @@ def main():
     # by hand against a foil the sweep converted earlier infers
     # data/<source>/chain-<case> from the neutron path, and a single rebuilt
     # path would hold only whichever foil the sweep happened to finish on.
-    converter_args = ["--library", args.library,
-                      "--source", source,
-                      "--output", str(args.cross_sections)]
-    if args.force:
-        converter_args.append("--force")
-    if args.endf_dir is not None:
-        converter_args += ["--endf-dir", str(args.endf_dir)]
-    if args.tarball is not None:
-        converter_args += ["--tarball", str(args.tarball)]
-    runner_args = ["--cross-sections", str(args.cross_sections),
+    #
+    # A published sweep has none of this: the release is the whole library, so
+    # there is no per-foil chain to get wrong and nothing to convert.
+    runner_args = ["--library", args.library, "--source", source,
                    "--output", str(args.output)]
+    if args.samples is not None:
+        runner_args += ["--samples", str(args.samples)]
+    if args.published:
+        converter_args = None
+        runner_args.append("--published")
+    else:
+        converter_args = ["--library", args.library,
+                          "--source", source,
+                          "--output", str(args.cross_sections)]
+        if args.force:
+            converter_args.append("--force")
+        if args.endf_dir is not None:
+            converter_args += ["--endf-dir", str(args.endf_dir)]
+        if args.tarball is not None:
+            converter_args += ["--tarball", str(args.tarball)]
+        runner_args += ["--cross-sections", str(args.cross_sections)]
     args.output.mkdir(parents=True, exist_ok=True)
 
-    rows = []
+    rows = {}
     failed = []
     start = time.perf_counter()
-    for index, case in enumerate(wanted, 1):
+    for index, (case, experiment) in enumerate(jobs, 1):
         elapsed = time.perf_counter() - start
-        print(f"[{index}/{len(wanted)}] {case} ({elapsed / 60:.0f} min in)", flush=True)
-        chain = ["--chain", str(HERE / "data" / source / f"chain-{case}")]
-        summary = run_case(case, args.experiment, args.output,
-                           converter_args + chain, runner_args + chain)
+        print(f"[{index}/{len(jobs)}] {case} {experiment} ({elapsed / 60:.0f} min in)",
+              flush=True)
+        chain = ([] if args.published else
+                 ["--chain", str(HERE / "data" / source / f"chain-{case}")])
+        summary = run_case(case, experiment, args.output,
+                           None if converter_args is None else converter_args + chain,
+                           runner_args + chain)
         if summary is None:
-            failed.append(case)
+            failed.append(f"{case}/{experiment}")
             continue
         nuclide, percent = dominant(summary)
         sigma = data_sigma(summary)
-        rows.append({
+        rows.setdefault(experiment, []).append({
             "case": case,
             "median_ratio": summary["median_ratio"],
             "mean_deviation_percent": summary["mean_deviation_percent"],
@@ -227,13 +281,20 @@ def main():
               f"{nuclide} {percent:.0f}%",
               flush=True)
 
-    (args.output / "sweep.json").write_text(json.dumps(
-        {"library": args.library, "experiment": args.experiment,
-         "failed": failed, "foils": rows}, indent=1, sort_keys=True))
-    (args.output / "sweep.md").write_text(table(rows, args.library, args.experiment))
+    # One table per campaign: a C/E ranking only means something within one
+    # schedule, and the three campaigns test different products.
+    for experiment, found in rows.items():
+        (args.output / f"sweep_{experiment}.json").write_text(json.dumps(
+            {"library": args.library, "experiment": experiment,
+             "published": args.published,
+             "failed": [f for f in failed if f.endswith(f"/{experiment}")],
+             "foils": found}, indent=1, sort_keys=True))
+        (args.output / f"sweep_{experiment}.md").write_text(
+            table(found, args.library, experiment))
 
-    print(f"\n{len(rows)} foils in {(time.perf_counter() - start) / 60:.0f} min "
-          f"-> {args.output}/sweep.md")
+    done = sum(len(found) for found in rows.values())
+    print(f"\n{done} runs in {(time.perf_counter() - start) / 60:.0f} min "
+          f"-> {args.output}/sweep_<experiment>.md")
     if failed:
         print(f"{len(failed)} failed: {' '.join(failed)}")
     return 1 if failed else 0

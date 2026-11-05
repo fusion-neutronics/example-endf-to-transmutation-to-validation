@@ -80,13 +80,19 @@ DECAY_GLOB = "dec-*.endf"
 DECAY_ISOMER_GLOB = "dec-*m[0-9].endf"
 
 # ENDF is a fixed-column format: six 11-character fields, then MAT, MF, MT.
-_FIELD = [slice(0, 11), slice(11, 22), slice(22, 33), slice(33, 44)]
+_FIELD = [slice(0, 11), slice(11, 22), slice(22, 33), slice(33, 44), slice(44, 55)]
 _MF = slice(70, 72)
 _MT = slice(72, 75)
 # ZSYMAM, "26-Fe- 56", is the fifth record of MF=1 MT=451: four numeric records
 # come first, then the text section opens with it.
 _ZSYMAM = 4
 _ZSYMAM_RE = re.compile(r"\s*(\d+)\s*-\s*([A-Za-z]{1,2})\s*-\s*(\d+)")
+# NSUB, the fifth field of MT=451's third record, names the sublibrary: 10 is
+# incident neutrons. TENDL unpacks its photonuclear files (NSUB 0, "g-Fe054")
+# beside the neutron ones under the same nuclide names, so without this a
+# directory holding both reads as two evaluations of every isotope.
+_NSUB_RECORD = 2
+_NSUB_NEUTRON = 10
 
 
 def isotopes_for(elements):
@@ -119,6 +125,10 @@ def endf_float(field):
 def identify(path, lines=8):
     """The nuclide an ENDF file holds, like "Fe56", or None if it is not one.
 
+    Only incident-neutron evaluations count. Any other sublibrary (photonuclear,
+    decay, fission yields, charged particles) reads as None and is skipped,
+    since a directory may hold several of them for the same nuclide.
+
     Reads the MF=1 MT=451 descriptive section that every ENDF evaluation opens
     with. The name comes from its ZSYMAM field rather than from ZA, so no
     periodic table is needed here, and the isomeric state comes from LIS0 in
@@ -146,10 +156,11 @@ def identify(path, lines=8):
             za = int(round(endf_float(line[_FIELD[0]])))
             # Second record, fourth field: LIS0, which is 0 for a ground state.
             state = int(head[index + 1][_FIELD[3]].strip() or 0)
+            sublibrary = int(head[index + _NSUB_RECORD][_FIELD[4]].strip() or -1)
             match = _ZSYMAM_RE.match(head[index + _ZSYMAM][_FIELD[0]])
         except (ValueError, IndexError):
             return None
-        if match is None:
+        if match is None or sublibrary != _NSUB_NEUTRON:
             return None
         z, symbol, mass = int(match.group(1)), match.group(2).capitalize(), int(match.group(3))
         # ZSYMAM is free text, so check it against the header's own ZA.

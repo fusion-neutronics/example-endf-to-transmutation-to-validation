@@ -39,7 +39,7 @@ def load(source: str, results_root: pathlib.Path, experiment: str) -> dict:
     """One sweep's per-foil results, keyed by foil name.
 
     Read from the per-foil ``fns_<case>_<experiment>.json`` files rather than
-    the sweep's own ``sweep.json``, because that summary is only written when a
+    the sweep's own ``sweep_<experiment>.json``, because that summary is only written when a
     sweep runs to completion. A sweep that was interrupted, or one still in
     flight, leaves the per-foil files behind and is worth comparing anyway.
     """

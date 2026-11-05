@@ -257,8 +257,62 @@ EXPERIMENT_ORDER = ("2000exp_5min", "1996exp_5min", "1996exp_7hour")
 # same reason: half-lives have to come from somewhere.
 DECAY_LIBRARY = "endf-b8.1"
 
-# Where convert_to_arrow.py's cache puts a converted decay sublibrary.
-CACHE = pathlib.Path.home() / ".cache" / "yamc"
+
+def release_key(name):
+    """Sort key for a release folder, "2026-10-12.1", by date then build number."""
+    date, _, build = name.partition(".")
+    return (date, int(build) if build.isdigit() else 0)
+
+
+def recorded_releases(results_root, cases, decay=DECAY_LIBRARY):
+    """The releases of `decay` the filed runs for these foils say they read.
+
+    Every run records the dated release yani resolved each library keyword to,
+    and the half-lives and decay records on the page have to come from that same
+    release: the cache keeps every release it has ever fetched, and the newest
+    one there is not necessarily the one a result was computed with.
+    """
+    found = set()
+    for case in cases:
+        for path in [*results_root.glob(f"*/fns_{case}_*.json"),
+                     *results_root.glob(f"*/sweep/fns_{case}_*.json")]:
+            try:
+                record = json.loads(path.read_text())["nuclear_data"]["decay_data"]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if record.get("library") == decay and record.get("release"):
+                found.add(record["release"])
+    return found
+
+
+def decay_section(decay=DECAY_LIBRARY, releases=()):
+    """The cached decay subsection to read, and the release it belongs to.
+
+    yani caches one folder per release, ``<cache>/<library>/<release>/``. The
+    release the runs recorded is preferred; with none recorded, or with runs
+    that disagree, the newest of them (or of the cache) is read and the choice
+    printed, so a page quoting a different build than its runs says so in the
+    log rather than not at all.
+    """
+    import yani
+
+    root = pathlib.Path(yani.cache_dir()) / decay
+    cached = sorted((path.name for path in root.iterdir()
+                     if (path / "transmutation" / "decay.arrow").is_dir()),
+                    key=release_key) if root.is_dir() else []
+    wanted = sorted(releases, key=release_key)
+    if len(wanted) > 1:
+        print(f"decay data: these runs read {len(wanted)} releases of {decay} "
+              f"({', '.join(wanted)}); the page quotes the newest")
+    if wanted:
+        release = wanted[-1]
+    elif cached:
+        release = cached[-1]
+        print(f"decay data: no run recorded its {decay} release, reading the "
+              f"newest cached one, {release}")
+    else:
+        return None, None
+    return root / release / "transmutation" / "decay.arrow", release
 
 
 def element_name(case):
@@ -272,7 +326,7 @@ def element_name(case):
     return yani.data.element_names().get(case, case).title()
 
 
-def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
+def half_lives_from(decay=DECAY_LIBRARY, chain=None, releases=()):
     """Half-lives for the ``T1/2`` column, in seconds, keyed by nuclide.
 
     The one thing this report needs a chain for. Routes and isomeric branching
@@ -305,11 +359,12 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
             return (dict(yani.TransmutationChain(str(chain)).half_lives), None,
                     named or str(chain))
 
-        borrowed = cache / f"{decay}-transmutation-decay.arrow"
-        if not borrowed.is_dir():
-            print(f"half-lives: {borrowed} is not there, so the T1/2 column is "
-                  f"left blank.\n"
-                  f"            Convert the decay sublibrary first, or pass "
+        borrowed, release = decay_section(decay, releases)
+        if borrowed is None or not borrowed.is_dir():
+            print(f"half-lives: no {decay} decay data "
+                  f"{'' if release is None else f'release {release} '}in yani's "
+                  f"cache, so the T1/2 column is left blank.\n"
+                  f"            Rerun step 2, which downloads it, or pass "
                   f"--chain a directory that has its own decay/.")
             return {}, None, None
 
@@ -323,7 +378,7 @@ def half_lives_from(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
             "subsections": {"decay": {"path": "decay"}},
         }))
         loaded = dict(yani.TransmutationChain(str(root)).half_lives)
-        print(f"half-lives: {len(loaded)} from {borrowed.name}")
+        print(f"half-lives: {len(loaded)} from {decay} {release}")
         return loaded, composed, decay
     except Exception as error:  # noqa: BLE001 - the column is optional
         print(f"half-lives: unreadable ({error}). The T1/2 column is left blank.")
@@ -341,7 +396,7 @@ INCONSISTENCY_KINDS = {
 }
 
 
-def decay_records(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
+def decay_records(decay=DECAY_LIBRARY, chain=None, releases=()):
     """What the decay sublibrary says about its own records.
 
     The published libraries are dated builds, and the decay subsection's
@@ -371,7 +426,8 @@ def decay_records(decay=DECAY_LIBRARY, chain=None, cache=CACHE):
     if chain is not None and (chain / "decay").is_dir():
         source = chain / "decay" / "provenance.json"
     else:
-        source = cache / f"{decay}-transmutation-decay.arrow" / "provenance.json"
+        section, _release = decay_section(decay, releases)
+        source = (section or pathlib.Path("no cached decay data")) / "provenance.json"
     try:
         record = json.loads(source.read_text())
     except Exception as error:  # noqa: BLE001 - the page is better than no page
@@ -2021,8 +2077,9 @@ def build(case, experiments, libraries, results_root, chain, decay, out,
     in one document: the spread between its experiments is a result, and the
     published report binds them the same way.
     """
-    half_lives, composed, decay_used = half_lives_from(decay, chain)
-    records = decay_records(decay, chain)
+    releases = recorded_releases(results_root, [case], decay)
+    half_lives, composed, decay_used = half_lives_from(decay, chain, releases)
+    records = decay_records(decay, chain, releases)
     sections, layouts, pages = prepare(case, experiments, libraries,
                                        results_root, half_lives)
     filed = sections[0][1][0][1].get("production_routes") or {}
@@ -2064,8 +2121,9 @@ def build_volume(cases, libraries, results_root, chain, decay, out,
     on a sweep of 73 there will usually be a few, and losing the other 70 to one
     of them would be absurd.
     """
-    half_lives, composed, decay_used = half_lives_from(decay, chain)
-    records = decay_records(decay, chain)
+    releases = recorded_releases(results_root, cases, decay)
+    half_lives, composed, decay_used = half_lives_from(decay, chain, releases)
+    records = decay_records(decay, chain, releases)
 
     prepared, skipped = [], []
     for case in cases:
