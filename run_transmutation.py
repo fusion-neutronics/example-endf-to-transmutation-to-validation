@@ -295,9 +295,15 @@ def report_uncertainty(info, relative):
         print((label if index == 0 else " " * len(label)) + line)
 
 
-def run(case, cross_sections, chain, uncertainty=None):
-    """Specific decay heat [uW/g] after each cooling step, and its breakdown."""
-    yani.cross_section_data = str(cross_sections)
+def run(case, cross_sections, chain, uncertainty=None, published=None):
+    """Specific decay heat [uW/g] after each cooling step, and its breakdown.
+
+    `published` is a library keyword such as "jeff-4.0". Given one, the cross
+    sections, their covariance, the reaction topology and the isomeric
+    branching all come from yani's published release of that library, which
+    yani downloads on first use, and `cross_sections` and `chain` are not read.
+    """
+    yani.cross_section_data = published or str(cross_sections)
     yani.transmutation_decay_data = DECAY_LIBRARY
 
     # Off, rather than pointed at a library. Nothing in any of the 73 FNS foils
@@ -315,7 +321,7 @@ def run(case, cross_sections, chain, uncertainty=None):
     # on which parent gives which product) and the isomeric branching (which
     # state it lands in, which is energy dependent and decides the answer
     # outright for foils whose heat comes from an isomer).
-    have = subsections_of(chain)
+    have = subsections_of(chain) if published is None else set()
     applied = {}
     for subsection, setting, warning in [
         ("branching", "transmutation_branch_ratios",
@@ -323,7 +329,11 @@ def run(case, cross_sections, chain, uncertainty=None):
         ("reactions", "transmutation_reactions",
          "fewer production channels; rerun without --no-reactions"),
     ]:
-        if subsection in have:
+        if published is not None:
+            setattr(yani, setting, published)
+            print(f"{subsection}: {published} (published)")
+            applied[subsection] = {"library": published, "path": None}
+        elif subsection in have:
             setattr(yani, setting, str(chain))
             print(f"{subsection}: {chain}")
             applied[subsection] = {"library": library_of(chain), "path": str(chain)}
@@ -360,8 +370,9 @@ def run(case, cross_sections, chain, uncertainty=None):
     # Naming both is the only way a reader can tell which of the two a
     # library-to-library difference belongs to.
     provenance = {
-        "cross_sections": {"library": library_of(cross_sections, nuclides),
-                           "path": str(cross_sections)},
+        "cross_sections": ({"library": published, "path": None} if published else
+                           {"library": library_of(cross_sections, nuclides),
+                            "path": str(cross_sections)}),
         "reactions": applied.get("reactions"),
         "branching": applied.get("branching"),
         "decay_data": {"library": DECAY_LIBRARY, "path": None},
@@ -385,6 +396,18 @@ def run(case, cross_sections, chain, uncertainty=None):
     results = material.transmute(schedule, data_uncertainty=uncertainty)
     material_id = material.id or 0
     states = results.step_materials(material_id)
+
+    # Every part read from a published library is pinned to the dated release
+    # yani resolved it to, which is what the library name alone cannot say: a
+    # keyword means whatever was newest on the day it ran. The decay data is
+    # always one of these, so this is never empty, and the report reads its
+    # half-lives from the same release rather than whichever one is cached.
+    releases = {keyword: dict(release)
+                for keyword, release in (results.data_releases or {}).items()}
+    for record in provenance.values():
+        if record.get("path") is None and record.get("library") in releases:
+            record["release"] = releases[record["library"]]["release"]
+    provenance["data_releases"] = releases
 
     # One state per schedule step and no initial entry, so the irradiation
     # pulses come first and the measurement starts after them.
@@ -450,6 +473,12 @@ def run(case, cross_sections, chain, uncertainty=None):
     # foil's isotopes, so one built for a different foil leaves these nuclides
     # with no reactions. Cross sections that do not cover the material will do
     # it too.
+    if not heat.any() and published is not None:
+        raise SystemExit(
+            f"{case.name}: every cooling step came out at zero decay heat, so the "
+            f"transmutation produced no activation products from the published "
+            f"{published} data ({releases.get(published, {}).get('release')}). "
+            f"That is a fault in the published release rather than in this run.")
     if not heat.any():
         raise SystemExit(
             f"{case.name}: every cooling step came out at zero decay heat, so the "
@@ -643,7 +672,21 @@ def main():
                              "perturbation is a function of (seed, replica, nuclide), "
                              "so the same seed reproduces a run whatever the replica "
                              "count")
+    parser.add_argument("--published", action="store_true",
+                        help="read the cross sections, covariance, reaction topology "
+                             "and isomeric branching from yani's published release of "
+                             "--library, downloaded on first use, instead of from "
+                             "convert_to_arrow.py's output. Needs no ENDF and no NJOY")
     args = parser.parse_args()
+
+    if args.published:
+        clashing = [flag for flag, value in [("--endf-dir", args.endf_dir),
+                                             ("--cross-sections", args.cross_sections),
+                                             ("--chain", args.chain)] if value is not None]
+        if clashing:
+            raise SystemExit(f"--published reads {args.library} as published, so "
+                             f"{', '.join(clashing)} would be ignored. Drop one or "
+                             f"the other.")
 
     # Results and inputs live under the name of the nuclear data they came from,
     # so two libraries do not overwrite each other (see data_source).
@@ -662,12 +705,13 @@ def main():
             print(f"{name:8s} {' '.join(fns_case.experiments(name, args.fns_data))}")
         return
 
-    if not args.cross_sections.is_dir():
+    if not args.published and not args.cross_sections.is_dir():
         data_root = HERE / "data"
         available = available_cross_section_sources(data_root)
         message = [
             f"no cross sections at {args.cross_sections}.",
-            "Run convert_to_arrow.py first, or point this run at an existing source.",
+            "Run convert_to_arrow.py first, point this run at an existing source, or "
+            f"pass --published to download yani's published {args.library} instead.",
         ]
         if available:
             message.append(
@@ -704,7 +748,8 @@ def main():
 
     (calculated, breakdown, edge_rates, initial_atoms, sigma, by_nuclide_sigma,
      info, routes, branching, provenance) = run(
-        case, args.cross_sections, args.chain, uncertainty)
+        case, args.cross_sections, args.chain, uncertainty,
+        published=args.library if args.published else None)
     ratio, metrics = summarise(case, calculated)
     plot(case, calculated, breakdown, ratio, metrics, args.output, sigma)
 

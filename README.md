@@ -10,7 +10,10 @@ The whole chain is three steps.
 2. **Arrow out.** NJOY reconstructs the resonances and Doppler broadens to
    294 K, and `convert_to_arrow.py` calls YANI's `convert_neutron_xs` to write
    the result as Arrow, which is the form YANI reads. This happens on your
-   machine; nothing pre-processed is downloaded.
+   machine; nothing pre-processed is downloaded. If you only want the
+   validation, `--published` skips this step and runs on YANI's own published
+   build of the same libraries instead (see
+   [Skipping step 1](#skipping-step-1-published-data)).
 3. **Validation.** YANI irradiates a 1 g foil with the measured neutron
    spectrum from the JAEA FNS decay-heat experiment, follows the activation
    products through the cooling schedule, and the specific decay heat is
@@ -88,6 +91,35 @@ from the benchmark's own input deck, so `--case Cs` picks up the caesium
 carbonate the experiment actually used (Cs 81.58%, O 14.73%, C 3.69%) and
 converts the isotopes of all three elements.
 
+### Skipping step 1: published data
+
+YANI publishes its own build of `tendl-2025`, `jeff-4.0`, `endf-b8.1` and
+`jendl-5.0`: the cross sections with their MF=33 covariance, the reaction
+topology and the isomeric branching, made with the converters step 1 calls.
+`--published` runs on that instead of on step 1's output, so there is no ENDF to
+find and no NJOY to run. YANI downloads what the foil needs on first use and
+caches it:
+
+```bash
+python run_transmutation.py --case W --library jeff-4.0 --published
+```
+
+The answer is the same. Tungsten on `2000exp_5min` comes out at median C/E
+1.805 and 78.9% mean deviation either way, to the digit, against the JEFF-4.0
+table in [Four libraries at once](#four-libraries-at-once). What it saves is the
+conversion, which is most of the wall time for a library with large evaluations
+(JENDL-5's tungsten takes NJOY over ten minutes) and a small part for the rest:
+the uncertainty replicas in step 2 cost more than the conversion did, and
+`--samples` is what bounds those.
+
+Every run records the dated release each library resolved to, in its JSON
+under `nuclear_data`, because a keyword means whatever was newest on the day it
+ran. The report reads its half-lives from that same release.
+
+Results file under `results/<library>/` exactly as a converted run does, so the
+report binds them the same way. A library run both ways leaves two results in one
+folder and the report reads the newer; give one of them `--source` to keep both.
+
 ### Which experiment
 
 Each foil was measured in up to three campaigns, chosen with `--experiment`:
@@ -120,7 +152,10 @@ do not matter: `n-Fe056.tendl`, `n-026_Fe_056.endf` and `whatever.dat` are all
 recognised, non-ENDF files in the same directory are ignored, and metastable
 evaluations are named from their LIS0 flag, `Ta180_m1`, rather than spotted by
 an `m` in the filename, so they are neither mistaken for the ground state nor
-dropped. That is what makes natural tantalum's Ta180m convertible. Scanning a 2850-file library takes under a second. If an isotope
+dropped. That is what makes natural tantalum's Ta180m convertible. Only
+incident-neutron evaluations are picked up, read from the header's NSUB field,
+so a TENDL directory with the photonuclear `g-` files unpacked beside the `n-`
+ones works as it is. Scanning a 2850-file library takes under a second. If an isotope
 is missing, or two evaluations of the same one are present, it says which and
 stops rather than guessing.
 
@@ -249,6 +284,32 @@ With no arguments it writes one for every foil that has a result. Which foils,
 which campaigns and which libraries are all read off what is on disk. `--case`
 picks foils, `--experiments` picks campaigns, and naming exactly one campaign
 puts it back in the filename as `report_<case>_<experiment>.pdf`.
+
+#### The complete report
+
+Every foil, every campaign it was measured in, four libraries, then one PDF per
+foil. On published data that is:
+
+```bash
+for lib in tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0; do
+  python sweep_fns.py --published --library $lib --experiment all
+done
+python make_report.py --libraries tendl-2025 jeff-4.0 endf-b8.1 jendl-5.0
+```
+
+`--experiment all` runs each foil in every campaign that measured it: all 73 in
+`2000exp_5min`, 30 in `1996exp_5min` and 29 in `1996exp_7hour`, so 132 runs per
+library. Each sweep writes one ranked table per campaign beside the results,
+`results/<library>/sweep/sweep_<experiment>.md`. A foil that fails is named and
+the sweep carries on, and the report binds whatever came through.
+
+Most of the time goes on the uncertainty, which adds replicas until the sigmas
+settle. `--samples 32` fixes the count and makes a sweep several times quicker,
+at the price of a noisier sigma; the calculated values themselves do not move.
+
+To build it from your own ENDF instead, drop `--published` and give each sweep
+its library's directory with `--endf-dir`, as in
+[One folder per library](#one-folder-per-library).
 
 The calculation's own uncertainty is on the page beside its value, `+/- 6%` and
 `%ΔCnuc` both. A run that carried no covariance, because step 1 was given
