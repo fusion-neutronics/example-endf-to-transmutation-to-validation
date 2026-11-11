@@ -17,7 +17,7 @@ njoy2016
 # Each wheel pins the build of the published nuclear data it expects and refuses
 # any other, so the wheel and the data move together and this floor is a floor
 # on both.
-yani>=0.22.0
+yani>=0.24.0
 
 # The C/E plot. It also brings numpy, which the scoring arithmetic uses, so
 # numpy is not listed separately: one line fewer to read, and there is no
